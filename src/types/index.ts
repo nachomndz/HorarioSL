@@ -34,6 +34,7 @@ export interface TimetableSettings {
   day_start: string;
   day_end: string;
   session_duration_minutes: number;
+  block_granularity_minutes: number;
   recesses: RecessConfig[];
   updated_at: string;
 }
@@ -51,6 +52,7 @@ export interface TimeSlot {
   end_time: string;
   slot_type: SlotType;
   sort_order: number;
+  duration_minutes: number;
 }
 
 export interface Subject {
@@ -59,7 +61,26 @@ export interface Subject {
   name: string;
   short_name: string | null;
   color: string | null;
+  applicable_cycles: Cycle[] | null;
   created_at: string;
+}
+
+export interface FormativeStage {
+  id: string;
+  school_id: string;
+  cycle: Cycle;
+  name: string;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface CurriculumRequirement {
+  id: string;
+  formative_stage_id: string;
+  subject_id: string;
+  mandatory_weekly_hours: number;
+  session_duration_minutes: number;
+  elective_group_id: string | null;
 }
 
 export interface Course {
@@ -67,6 +88,7 @@ export interface Course {
   school_id: string;
   name: string;
   cycle: Cycle;
+  formative_stage_id: string | null;
   sort_order: number;
   created_at: string;
 }
@@ -76,6 +98,8 @@ export interface CourseSubjectHours {
   course_id: string;
   subject_id: string;
   weekly_hours: number;
+  weekly_minutes: number;
+  session_duration_minutes: number;
 }
 
 export interface Teacher {
@@ -130,6 +154,7 @@ export interface ScheduleEntry {
   subject_id: string;
   course_id: string;
   time_slot_id: string;
+  duration_minutes: number;
 }
 
 export interface Feedback {
@@ -146,6 +171,8 @@ export interface SessionDemand {
   courseId: string;
   subjectId: string;
   index: number;
+  durationMinutes: number;
+  blocksNeeded: number;
 }
 
 export interface PlacedSession {
@@ -153,6 +180,8 @@ export interface PlacedSession {
   subjectId: string;
   teacherId: string;
   timeSlotId: string;
+  durationMinutes: number;
+  blockSlotIds: string[];
 }
 
 export interface UnplacedSession {
@@ -176,4 +205,5 @@ export interface SolverInput {
   teacherUnavailability: TeacherUnavailability[];
   courseSubjectHours: CourseSubjectHours[];
   timeSlots: TimeSlot[];
+  blockGranularityMinutes: number;
 }

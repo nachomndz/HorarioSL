@@ -18,6 +18,7 @@ import { CYCLE_LABELS, CYCLE_ORDER } from "@/lib/utils";
 import { AvailabilityGrid } from "@/components/schedule-grid/schedule-grid";
 import { PageHeader } from "@/components/layout/page-header";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
+import { SectionHint } from "@/components/ui/section-hint";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
@@ -159,10 +160,15 @@ export default function TeacherEditPage() {
 
   async function handleSave() {
     if (!teacher || !isAdmin) return;
+    const name = teacher.name.trim();
+    if (!name) {
+      toast.error("El nombre no puede estar vacío");
+      return;
+    }
     setSaving(true);
 
     const payload = {
-      name: teacher.name,
+      name,
       max_weekly_hours: teacher.max_weekly_hours,
       notes: teacher.notes,
       scope_type: teacher.scope_type,
@@ -174,6 +180,7 @@ export default function TeacherEditPage() {
 
     if (isLocalMode()) {
       localDb.saveTeacher(teacher.id, payload);
+      setTeacher({ ...teacher, name });
       setSaving(false);
       toast.success("Profesor guardado");
       return;
@@ -230,6 +237,7 @@ export default function TeacherEditPage() {
     }
 
     setSaving(false);
+    setTeacher({ ...teacher, name });
     toast.success("Profesor guardado");
   }
 
@@ -258,8 +266,13 @@ export default function TeacherEditPage() {
 
         <TabsContent value="general" className="mt-4">
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
             <CardTitle>Datos generales</CardTitle>
+            {isAdmin && (
+              <Button size="sm" onClick={handleSave} disabled={saving}>
+                {saving ? "Guardando..." : "Guardar cambios"}
+              </Button>
+            )}
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -271,7 +284,10 @@ export default function TeacherEditPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Horas lectivas máximas / semana</Label>
+              <Label className="flex items-center gap-2">
+                Horas lectivas máximas / semana
+                <SectionHint label="Límite de horas que el motor intentará asignar a este profesor cada semana." />
+              </Label>
               <Input
                 type="number"
                 min={1}
@@ -292,7 +308,10 @@ export default function TeacherEditPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Ámbito de cursos</Label>
+              <Label className="flex items-center gap-2">
+                Ámbito de cursos
+                <SectionHint label="Todo el colegio: cualquier curso. Un ciclo: solo cursos de esa etapa. Cursos concretos: solo los seleccionados." />
+              </Label>
               <Select
                 value={teacher.scope_type}
                 onValueChange={(v: Teacher["scope_type"]) =>
@@ -392,7 +411,10 @@ export default function TeacherEditPage() {
         <TabsContent value="availability" className="mt-4">
       <Card>
         <CardHeader>
-          <CardTitle>Disponibilidad</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            Disponibilidad
+            <SectionHint label="Marca las franjas en las que el profesor NO puede dar clase. Se actualiza al guardar la malla horaria." />
+          </CardTitle>
           <CardDescription>
             Marca las franjas en las que el profesor NO está disponible.
           </CardDescription>

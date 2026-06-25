@@ -1,4 +1,15 @@
 import type { Cycle, RecessConfig, Schedule } from "@/types";
+import { courseHoursFromRequirement } from "@/lib/curriculum";
+import {
+  buildPrimariaAnexoSeed,
+  hasPrimariaCurriculum,
+} from "@/lib/curriculum/seed-primaria";
+import {
+  DEFAULT_STAGES_BY_CYCLE,
+  DEFAULT_PRIMARIA_ELECTIVES,
+  inferStageIndexForCourse,
+  type PrimariaElectiveChoices,
+} from "@/lib/curriculum/templates";
 import {
   INVITADO_PASSWORD_HASH,
   SAN_LORENZO_LOGIN_ID,
@@ -57,6 +68,7 @@ function generateSlotsForSchool(db: LocalDatabase, schoolId: string) {
     day_start: settings.day_start.slice(0, 5),
     day_end: settings.day_end.slice(0, 5),
     session_duration_minutes: settings.session_duration_minutes,
+    block_granularity_minutes: settings.block_granularity_minutes ?? 15,
     recesses: settings.recesses as RecessConfig[],
   });
   for (const slot of generated) {
@@ -96,16 +108,41 @@ const DEFAULT_SUBJECTS = [
 ] as const;
 
 function seedCourses(db: LocalDatabase, schoolId: string) {
+  seedDefaultFormativeStages(db, schoolId);
   DEFAULT_COURSES_TEMPLATE.forEach((c, i) => {
+    const cycleStages = db.formativeStages
+      .filter((s) => s.school_id === schoolId && s.cycle === c.cycle)
+      .sort((a, b) => a.sort_order - b.sort_order);
+    const stageIdx = inferStageIndexForCourse(c.name, c.cycle);
     db.courses.push({
       id: newId(),
       school_id: schoolId,
       name: c.name,
       cycle: c.cycle,
+      formative_stage_id: cycleStages[stageIdx]?.id ?? cycleStages[0]?.id ?? null,
       sort_order: i + 1,
       created_at: nowIso(),
     });
   });
+}
+
+function seedDefaultFormativeStages(db: LocalDatabase, schoolId: string) {
+  if (db.formativeStages.some((s) => s.school_id === schoolId)) return;
+  for (const [cycle, templates] of Object.entries(DEFAULT_STAGES_BY_CYCLE) as [
+    Cycle,
+    (typeof DEFAULT_STAGES_BY_CYCLE)[Cycle],
+  ][]) {
+    for (const t of templates) {
+      db.formativeStages.push({
+        id: newId(),
+        school_id: schoolId,
+        cycle,
+        name: t.name,
+        sort_order: t.sortOrder,
+        created_at: nowIso(),
+      });
+    }
+  }
 }
 
 function seedSchoolCore(db: LocalDatabase, schoolId: string) {
@@ -128,6 +165,7 @@ function seedSchoolCore(db: LocalDatabase, schoolId: string) {
       day_start: "09:00:00",
       day_end: "16:00:00",
       session_duration_minutes: 45,
+      block_granularity_minutes: 15,
       recesses: [{ start: "11:30", duration_minutes: 30 }] as RecessConfig[],
       updated_at: nowIso(),
     });
@@ -146,57 +184,105 @@ function seedDefaultSubjects(db: LocalDatabase, schoolId: string) {
       name,
       short_name,
       color,
+      applicable_cycles: ["infantil", "primaria", "secundaria", "diversificacion"],
       created_at: nowIso(),
     });
   }
 }
 
-const HOURS_BY_CYCLE: Record<Cycle, Record<string, number>> = {
-  infantil: {
-    "Lengua Castellana": 4,
-    "Matemáticas": 3,
-    "Inglés": 2,
-    "Educación Física": 2,
-    "Plástica": 2,
-    "Música": 2,
-    "Valores": 2,
-  },
-  primaria: {
-    "Lengua Castellana": 5,
-    "Matemáticas": 4,
-    "Inglés": 3,
-    "Ciencias Naturales": 2,
-    "Ciencias Sociales": 2,
-    "Educación Física": 2,
-    "Plástica": 1,
-    "Música": 1,
-    "Religión": 1,
-    "Valores": 1,
-  },
-  secundaria: {
-    "Lengua Castellana": 4,
-    "Matemáticas": 4,
-    "Inglés": 3,
-    "Ciencias Naturales": 3,
-    "Ciencias Sociales": 3,
-    "Educación Física": 2,
-    "Plástica": 1,
-    "Música": 1,
-    "Religión": 1,
-    "Valores": 1,
-  },
-  diversificacion: {
-    "Lengua Castellana": 4,
-    "Matemáticas": 3,
-    "Inglés": 2,
-    "Ciencias Naturales": 2,
-    "Ciencias Sociales": 2,
-    "Educación Física": 3,
-    "Plástica": 2,
-    "Música": 1,
-    "Valores": 2,
-  },
-};
+function applyCurriculumToCourseLocal(db: LocalDatabase, courseId: string) {
+  const course = db.courses.find((c) => c.id === courseId);
+  if (!course?.formative_stage_id) return;
+  const requirements = db.curriculumRequirements.filter(
+    (r) => r.formative_stage_id === course.formative_stage_id
+  );
+  for (const req of requirements) {
+    if (Number(req.mandatory_weekly_hours) <= 0) continue;
+    const row = courseHoursFromRequirement(courseId, req);
+    const existing = db.courseSubjectHours.find(
+      (h) => h.course_id === courseId && h.subject_id === req.subject_id
+    );
+    if (existing) {
+      Object.assign(existing, row);
+    } else {
+      db.courseSubjectHours.push({ id: newId(), ...row });
+    }
+  }
+}
+
+function applyPrimariaAnexoSeedLocal(
+  db: LocalDatabase,
+  schoolId: string,
+  choices: PrimariaElectiveChoices = DEFAULT_PRIMARIA_ELECTIVES
+): { error?: string } {
+  seedDefaultFormativeStages(db, schoolId);
+  const stages = db.formativeStages.filter((s) => s.school_id === schoolId);
+  const existingSubjects = db.subjects.filter((s) => s.school_id === schoolId);
+
+  let seed;
+  try {
+    seed = buildPrimariaAnexoSeed(schoolId, stages, existingSubjects, choices, newId);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Error al cargar Anexo IV" };
+  }
+
+  for (const subject of seed.subjects) {
+    db.subjects.push({ ...subject, created_at: nowIso() });
+  }
+
+  for (const req of seed.requirements) {
+    const existing = db.curriculumRequirements.find(
+      (r) =>
+        r.formative_stage_id === req.formative_stage_id && r.subject_id === req.subject_id
+    );
+    if (existing) {
+      existing.mandatory_weekly_hours = req.mandatory_weekly_hours;
+      existing.session_duration_minutes = req.session_duration_minutes;
+      existing.elective_group_id = req.elective_group_id;
+    } else {
+      db.curriculumRequirements.push({
+        id: newId(),
+        formative_stage_id: req.formative_stage_id,
+        subject_id: req.subject_id,
+        mandatory_weekly_hours: req.mandatory_weekly_hours,
+        session_duration_minutes: req.session_duration_minutes,
+        elective_group_id: req.elective_group_id,
+      });
+    }
+  }
+
+  for (const course of db.courses.filter((c) => c.school_id === schoolId)) {
+    if (course.formative_stage_id) continue;
+    const cycleStages = db.formativeStages
+      .filter((s) => s.school_id === schoolId && s.cycle === course.cycle)
+      .sort((a, b) => a.sort_order - b.sort_order);
+    const idx = inferStageIndexForCourse(course.name, course.cycle);
+    course.formative_stage_id = cycleStages[idx]?.id ?? cycleStages[0]?.id ?? null;
+  }
+
+  const primariaStages = stages
+    .filter((s) => s.cycle === "primaria")
+    .sort((a, b) => a.sort_order - b.sort_order);
+  for (const stage of primariaStages) {
+    const courses = db.courses.filter((c) => c.formative_stage_id === stage.id);
+    for (const course of courses) applyCurriculumToCourseLocal(db, course.id);
+  }
+
+  return {};
+}
+
+function seedPrimariaInitialDataLocal(db: LocalDatabase, schoolId: string): { skipped?: boolean } {
+  seedDefaultFormativeStages(db, schoolId);
+  const stages = db.formativeStages.filter((s) => s.school_id === schoolId);
+  const requirements = db.curriculumRequirements.filter((r) =>
+    stages.some((s) => s.id === r.formative_stage_id)
+  );
+  if (hasPrimariaCurriculum(stages, requirements)) {
+    return { skipped: true };
+  }
+  applyPrimariaAnexoSeedLocal(db, schoolId, DEFAULT_PRIMARIA_ELECTIVES);
+  return {};
+}
 
 function seedDefaultTeachers(db: LocalDatabase, schoolId: string) {
   const subjects = db.subjects.filter((s) => s.school_id === schoolId);
@@ -228,49 +314,13 @@ function seedDefaultTeachers(db: LocalDatabase, schoolId: string) {
   }
 }
 
-function seedDefaultHours(db: LocalDatabase, schoolId: string) {
-  const courses = db.courses.filter((c) => c.school_id === schoolId);
-  const subjects = db.subjects.filter((s) => s.school_id === schoolId);
-  if (!courses.length || !subjects.length) return;
-
-  for (const course of courses) {
-    const template = HOURS_BY_CYCLE[course.cycle];
-    for (const subject of subjects) {
-      const weekly_hours = template[subject.name] ?? 0;
-      if (weekly_hours <= 0) continue;
-      const existing = db.courseSubjectHours.find(
-        (h) => h.course_id === course.id && h.subject_id === subject.id
-      );
-      if (existing) {
-        existing.weekly_hours = weekly_hours;
-      } else {
-        db.courseSubjectHours.push({
-          id: newId(),
-          course_id: course.id,
-          subject_id: subject.id,
-          weekly_hours,
-        });
-      }
-    }
-  }
-}
-
 function seedScheduleInput(db: LocalDatabase, schoolId: string) {
   if (!db.courses.some((c) => c.school_id === schoolId)) {
     seedCourses(db, schoolId);
   }
-  if (!db.subjects.some((s) => s.school_id === schoolId)) {
-    seedDefaultSubjects(db, schoolId);
-  }
+  seedPrimariaInitialDataLocal(db, schoolId);
   if (!db.teachers.some((t) => t.school_id === schoolId)) {
     seedDefaultTeachers(db, schoolId);
-  }
-  if (
-    !db.courseSubjectHours.some(
-      (h) => h.weekly_hours > 0 && db.courses.some((c) => c.id === h.course_id && c.school_id === schoolId)
-    )
-  ) {
-    seedDefaultHours(db, schoolId);
   }
 }
 
@@ -382,6 +432,12 @@ export const localDb = {
   getSchoolData(schoolId: string) {
     const db = readDb();
     return {
+      formativeStages: db.formativeStages
+        .filter((s) => s.school_id === schoolId)
+        .sort((a, b) => a.sort_order - b.sort_order),
+      curriculumRequirements: db.curriculumRequirements.filter((r) =>
+        db.formativeStages.some((s) => s.id === r.formative_stage_id && s.school_id === schoolId)
+      ),
       courses: db.courses.filter((c) => c.school_id === schoolId).sort((a, b) => a.sort_order - b.sort_order),
       subjects: db.subjects.filter((s) => s.school_id === schoolId).sort((a, b) => a.name.localeCompare(b.name)),
       teachers: db.teachers.filter((t) => t.school_id === schoolId).sort((a, b) => a.name.localeCompare(b.name)),
@@ -407,17 +463,18 @@ export const localDb = {
     };
   },
 
-  updateCourse(courseId: string, data: { name?: string; cycle?: Cycle }) {
+  updateCourse(courseId: string, data: { name?: string; cycle?: Cycle; formative_stage_id?: string | null }) {
     const db = readDb();
     const course = db.courses.find((c) => c.id === courseId);
     if (!course) return { error: "Curso no encontrado" };
     if (data.name !== undefined) course.name = data.name;
     if (data.cycle !== undefined) course.cycle = data.cycle;
+    if (data.formative_stage_id !== undefined) course.formative_stage_id = data.formative_stage_id;
     writeDb(db);
     return {};
   },
 
-  addCourse(schoolId: string, name: string, cycle: Cycle) {
+  addCourse(schoolId: string, name: string, cycle: Cycle, formativeStageId?: string | null) {
     const db = readDb();
     const maxOrder = db.courses
       .filter((c) => c.school_id === schoolId)
@@ -427,6 +484,7 @@ export const localDb = {
       school_id: schoolId,
       name: name.trim(),
       cycle,
+      formative_stage_id: formativeStageId ?? null,
       sort_order: maxOrder + 1,
       created_at: nowIso(),
     };
@@ -504,11 +562,125 @@ export const localDb = {
   seedDefaultHours(schoolId: string) {
     const db = readDb();
     const courses = db.courses.filter((c) => c.school_id === schoolId);
-    const subjects = db.subjects.filter((s) => s.school_id === schoolId);
-    if (!courses.length || !subjects.length) {
-      return { error: "Configura cursos y asignaturas antes de cargar horas de ejemplo" };
+    if (!courses.length) {
+      return { error: "Configura cursos antes de cargar horas de ejemplo" };
     }
-    seedDefaultHours(db, schoolId);
+    seedPrimariaInitialDataLocal(db, schoolId);
+    writeDb(db);
+    return {};
+  },
+
+  getFormativeStages(schoolId: string, cycle?: Cycle) {
+    const db = readDb();
+    let stages = db.formativeStages
+      .filter((s) => s.school_id === schoolId)
+      .sort((a, b) => a.sort_order - b.sort_order);
+    if (cycle) stages = stages.filter((s) => s.cycle === cycle);
+    return stages;
+  },
+
+  seedDefaultFormativeStages(schoolId: string) {
+    const db = readDb();
+    seedDefaultFormativeStages(db, schoolId);
+    writeDb(db);
+    return {};
+  },
+
+  addFormativeStage(schoolId: string, cycle: Cycle, name: string) {
+    const db = readDb();
+    const maxOrder = db.formativeStages.filter((s) => s.school_id === schoolId && s.cycle === cycle).length;
+    const stage = {
+      id: newId(),
+      school_id: schoolId,
+      cycle,
+      name: name.trim(),
+      sort_order: maxOrder + 1,
+      created_at: nowIso(),
+    };
+    db.formativeStages.push(stage);
+    writeDb(db);
+    return stage;
+  },
+
+  updateFormativeStage(stageId: string, data: { name?: string }) {
+    const db = readDb();
+    const stage = db.formativeStages.find((s) => s.id === stageId);
+    if (!stage) return { error: "Subciclo no encontrado" };
+    if (data.name !== undefined) stage.name = data.name;
+    writeDb(db);
+    return {};
+  },
+
+  deleteFormativeStage(stageId: string) {
+    const db = readDb();
+    db.courses.forEach((c) => {
+      if (c.formative_stage_id === stageId) c.formative_stage_id = null;
+    });
+    db.formativeStages = db.formativeStages.filter((s) => s.id !== stageId);
+    db.curriculumRequirements = db.curriculumRequirements.filter(
+      (r) => r.formative_stage_id !== stageId
+    );
+    writeDb(db);
+    return {};
+  },
+
+  upsertCurriculumRequirement(
+    formativeStageId: string,
+    subjectId: string,
+    mandatoryWeeklyHours: number,
+    sessionDurationMinutes: number,
+    electiveGroupId: string | null = null
+  ) {
+    const db = readDb();
+    const existing = db.curriculumRequirements.find(
+      (r) => r.formative_stage_id === formativeStageId && r.subject_id === subjectId
+    );
+    if (existing) {
+      existing.mandatory_weekly_hours = mandatoryWeeklyHours;
+      existing.session_duration_minutes = sessionDurationMinutes;
+      if (electiveGroupId !== undefined) existing.elective_group_id = electiveGroupId;
+    } else {
+      db.curriculumRequirements.push({
+        id: newId(),
+        formative_stage_id: formativeStageId,
+        subject_id: subjectId,
+        mandatory_weekly_hours: mandatoryWeeklyHours,
+        session_duration_minutes: sessionDurationMinutes,
+        elective_group_id: electiveGroupId,
+      });
+    }
+    writeDb(db);
+    return {};
+  },
+
+  seedPrimariaInitialData(schoolId: string) {
+    const db = readDb();
+    const result = seedPrimariaInitialDataLocal(db, schoolId);
+    writeDb(db);
+    return result;
+  },
+
+  loadPrimariaAnexoTemplate(
+    schoolId: string,
+    choices: PrimariaElectiveChoices = DEFAULT_PRIMARIA_ELECTIVES
+  ) {
+    const db = readDb();
+    const result = applyPrimariaAnexoSeedLocal(db, schoolId, choices);
+    writeDb(db);
+    return result;
+  },
+
+  applyCurriculumToCourse(courseId: string) {
+    const db = readDb();
+    applyCurriculumToCourseLocal(db, courseId);
+    writeDb(db);
+    return {};
+  },
+
+  applyCurriculumToStage(formativeStageId: string) {
+    const db = readDb();
+    const courses = db.courses.filter((c) => c.formative_stage_id === formativeStageId);
+    for (const course of courses) applyCurriculumToCourseLocal(db, course.id);
     writeDb(db);
     return {};
   },
@@ -539,6 +711,8 @@ export const localDb = {
       hasSchedule: data.schedules.length > 0,
       courseCount: data.courses.length,
       subjectCount: data.subjects.length,
+      hasStages: data.formativeStages.length > 0,
+      hasCurriculum: data.curriculumRequirements.some((r) => Number(r.mandatory_weekly_hours) > 0),
     };
   },
 
@@ -550,6 +724,7 @@ export const localDb = {
       name: name.trim(),
       short_name: name.trim().slice(0, 12),
       color: "#3b82f6",
+      applicable_cycles: ["infantil", "primaria", "secundaria", "diversificacion"],
       created_at: nowIso(),
     });
     writeDb(db);
@@ -566,16 +741,35 @@ export const localDb = {
     return {};
   },
 
-  upsertCourseSubjectHours(rows: { course_id: string; subject_id: string; weekly_hours: number }[]) {
+  upsertCourseSubjectHours(
+    rows: {
+      course_id: string;
+      subject_id: string;
+      weekly_hours: number;
+      weekly_minutes?: number;
+      session_duration_minutes?: number;
+    }[]
+  ) {
     const db = readDb();
     for (const row of rows) {
+      const duration = row.session_duration_minutes ?? 45;
+      const weeklyMinutes = row.weekly_minutes ?? row.weekly_hours * duration;
       const existing = db.courseSubjectHours.find(
         (h) => h.course_id === row.course_id && h.subject_id === row.subject_id
       );
       if (existing) {
         existing.weekly_hours = row.weekly_hours;
+        existing.weekly_minutes = weeklyMinutes;
+        existing.session_duration_minutes = duration;
       } else {
-        db.courseSubjectHours.push({ id: newId(), ...row });
+        db.courseSubjectHours.push({
+          id: newId(),
+          course_id: row.course_id,
+          subject_id: row.subject_id,
+          weekly_hours: row.weekly_hours,
+          weekly_minutes: weeklyMinutes,
+          session_duration_minutes: duration,
+        });
       }
     }
     writeDb(db);
@@ -589,6 +783,7 @@ export const localDb = {
       day_start: string;
       day_end: string;
       session_duration_minutes: number;
+      block_granularity_minutes: number;
       recesses: RecessConfig[];
     }
   ) {
@@ -619,6 +814,7 @@ export const localDb = {
       day_start: settings.day_start,
       day_end: settings.day_end,
       session_duration_minutes: settings.session_duration_minutes,
+      block_granularity_minutes: settings.block_granularity_minutes,
       recesses: settings.recesses,
     });
     for (const slot of generated) {
@@ -649,6 +845,17 @@ export const localDb = {
     db.teachers.push(teacher);
     writeDb(db);
     return teacher;
+  },
+
+  renameTeacher(teacherId: string, name: string) {
+    const db = readDb();
+    const teacher = db.teachers.find((t) => t.id === teacherId);
+    if (!teacher) return { error: "Profesor no encontrado" };
+    const trimmed = name.trim();
+    if (!trimmed) return { error: "El nombre no puede estar vacío" };
+    teacher.name = trimmed;
+    writeDb(db);
+    return {};
   },
 
   deleteTeacher(teacherId: string) {
@@ -731,6 +938,7 @@ export const localDb = {
       subjectId: string;
       courseId: string;
       timeSlotId: string;
+      durationMinutes?: number;
     }[],
     stats: Schedule["generation_stats"]
   ) {
@@ -754,6 +962,7 @@ export const localDb = {
         subject_id: e.subjectId,
         course_id: e.courseId,
         time_slot_id: e.timeSlotId,
+        duration_minutes: e.durationMinutes ?? 45,
       });
     }
     writeDb(db);
@@ -770,6 +979,7 @@ export const localDb = {
         subjectId: string;
         courseId: string;
         timeSlotId: string;
+        durationMinutes?: number;
       }[];
     }
   ) {
@@ -791,6 +1001,7 @@ export const localDb = {
           subject_id: e.subjectId,
           course_id: e.courseId,
           time_slot_id: e.timeSlotId,
+          duration_minutes: e.durationMinutes ?? 45,
         });
       }
     }
@@ -938,6 +1149,7 @@ export function getSolverInputFromLocal(schoolId: string) {
     teacherCourses: data.teacherCourses,
     teacherUnavailability: data.teacherUnavailability,
     courseSubjectHours: data.courseSubjectHours.filter((h) => h.weekly_hours > 0),
-    timeSlots: data.timeSlots,
+    timeSlots: data.timeSlots.map((s) => ({ ...s, duration_minutes: s.duration_minutes ?? 15 })),
+    blockGranularityMinutes: data.timetableSettings?.block_granularity_minutes ?? 15,
   };
 }

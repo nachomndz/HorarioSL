@@ -18,7 +18,7 @@ export function SetupProgress({ steps }: { steps: SetupStep[] }) {
   const pct = Math.round((doneCount / steps.length) * 100);
 
   return (
-    <Card>
+    <Card id="setup-progress">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Configuración del colegio</CardTitle>
         <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">

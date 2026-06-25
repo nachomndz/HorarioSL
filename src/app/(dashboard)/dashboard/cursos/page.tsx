@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, Trash2, GraduationCap } from "lucide-react";
 import { toast } from "sonner";
 import { isLocalMode } from "@/lib/data/mode";
 import { localDb } from "@/lib/local-db/store";
@@ -9,17 +9,21 @@ import {
   addCourse as addCourseRepo,
   deleteCourse as deleteCourseRepo,
   fetchCourses,
+  fetchFormativeStages,
   reorderCourse as reorderCourseRepo,
   seedDefaultCourses,
   seedDefaultSubjects,
   updateCourse as updateCourseRepo,
 } from "@/lib/data/school-repository";
 import { useSchoolContext } from "@/hooks/use-school-context";
-import type { Course, Cycle } from "@/types";
+import type { Course, Cycle, FormativeStage } from "@/types";
 import { CYCLE_LABELS, CYCLE_ORDER } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
 import { ConfigGuide } from "@/components/layout/config-guide";
+import { NextStepBanner } from "@/components/layout/next-step-banner";
+import { EmptyState } from "@/components/layout/empty-state";
+import { SectionHint } from "@/components/ui/section-hint";
 import { ConfirmDialog } from "@/components/layout/confirm-dialog";
 import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
@@ -39,6 +43,8 @@ export default function CoursesPage() {
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
   const [newCycle, setNewCycle] = useState<Cycle>("primaria");
+  const [newStageId, setNewStageId] = useState<string>("");
+  const [stages, setStages] = useState<FormativeStage[]>([]);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<Cycle, boolean>>({
     infantil: false,
@@ -61,6 +67,11 @@ export default function CoursesPage() {
 
     try {
       setCourses(await fetchCourses(context.schoolId));
+      if (isLocalMode()) {
+        setStages(localDb.getFormativeStages(context.schoolId));
+      } else {
+        setStages(await fetchFormativeStages(context.schoolId));
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error al cargar cursos");
     }
@@ -82,6 +93,7 @@ export default function CoursesPage() {
     const { error } = await updateCourseRepo(course.id, {
       name: course.name,
       cycle: course.cycle,
+      formative_stage_id: course.formative_stage_id,
     });
     if (error) toast.error(error);
     else toast.success("Curso guardado");
@@ -91,14 +103,14 @@ export default function CoursesPage() {
     if (!schoolId || !newName.trim()) return;
 
     if (isLocalMode()) {
-      const c = localDb.addCourse(schoolId, newName, newCycle);
+      const c = localDb.addCourse(schoolId, newName, newCycle, newStageId || null);
       setCourses((prev) => [...prev, c]);
       setNewName("");
       toast.success("Curso añadido");
       return;
     }
 
-    const { course, error } = await addCourseRepo(schoolId, newName, newCycle);
+    const { course, error } = await addCourseRepo(schoolId, newName, newCycle, newStageId || null);
     if (error) {
       toast.error(error);
       return;
@@ -190,7 +202,7 @@ export default function CoursesPage() {
         {isAdmin && (
           <>
             <Hint label="Reemplaza todos los cursos por una plantilla de ejemplo (Infantil, Primaria, Secundaria y Diversificación)">
-              <Button variant="outline" onClick={restoreTemplate}>
+              <Button data-tour="cursos-template" variant="outline" onClick={restoreTemplate}>
                 Cargar plantilla de ejemplo
               </Button>
             </Hint>
@@ -206,7 +218,10 @@ export default function CoursesPage() {
       {isAdmin && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Añadir curso</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base">
+              Añadir curso
+              <SectionHint label="Cada curso debe pertenecer a un subciclo para heredar el currículo obligatorio correcto." />
+            </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
             <Input
@@ -215,7 +230,7 @@ export default function CoursesPage() {
               onChange={(e) => setNewName(e.target.value)}
               className="max-w-xs"
             />
-            <Select value={newCycle} onValueChange={(v: Cycle) => setNewCycle(v)}>
+            <Select value={newCycle} onValueChange={(v: Cycle) => { setNewCycle(v); setNewStageId(""); }}>
               <SelectTrigger className="w-44">
                 <SelectValue />
               </SelectTrigger>
@@ -223,6 +238,18 @@ export default function CoursesPage() {
                 {CYCLE_ORDER.map((c) => (
                   <SelectItem key={c} value={c}>
                     {CYCLE_LABELS[c]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={newStageId} onValueChange={setNewStageId}>
+              <SelectTrigger className="w-52">
+                <SelectValue placeholder="Subciclo" />
+              </SelectTrigger>
+              <SelectContent>
+                {stages.filter((s) => s.cycle === newCycle).map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -236,11 +263,13 @@ export default function CoursesPage() {
       )}
 
       {courses.length === 0 && (
-        <Card>
-          <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            Empieza cargando la plantilla de ejemplo o añade cursos manualmente.
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={GraduationCap}
+          title="Sin cursos"
+          description="Añade los grupos de tu centro o carga la plantilla de ejemplo para empezar."
+          actionLabel={isAdmin ? "Cargar plantilla de ejemplo" : undefined}
+          onAction={isAdmin ? restoreTemplate : undefined}
+        />
       )}
 
       {CYCLE_ORDER.map((cycle) => {
@@ -287,6 +316,28 @@ export default function CoursesPage() {
                       disabled={!isAdmin}
                       className="max-w-xs"
                     />
+                    <Select
+                      value={course.formative_stage_id ?? ""}
+                      onValueChange={(v) =>
+                        setCourses((prev) =>
+                          prev.map((c) =>
+                            c.id === course.id ? { ...c, formative_stage_id: v || null } : c
+                          )
+                        )
+                      }
+                      disabled={!isAdmin}
+                    >
+                      <SelectTrigger className="w-48">
+                        <SelectValue placeholder="Subciclo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {stages.filter((s) => s.cycle === course.cycle).map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     {isAdmin && (
                       <>
                         <Button size="sm" variant="outline" onClick={() => saveCourse(course)}>
@@ -332,6 +383,8 @@ export default function CoursesPage() {
         variant="destructive"
         onConfirm={() => deleteId && deleteCourse(deleteId)}
       />
+
+      <NextStepBanner />
     </div>
   );
 }

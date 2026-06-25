@@ -5,7 +5,9 @@ import type {
   TeacherCourse,
   TeacherSubject,
 } from "@/types";
-import { countSessionSlots } from "@/lib/timetable";
+import { sessionsNeeded } from "@/lib/curriculum";
+import { countAvailableMinutes } from "@/lib/timetable";
+import { isDurationMultipleOfGranularity } from "@/lib/curriculum";
 
 export interface ValidationResult {
   errors: string[];
@@ -63,9 +65,16 @@ function subjectName(input: SolverInput, subjectId: string): string {
   return s?.short_name || s?.name || subjectId;
 }
 
+function rowWeeklyMinutes(row: { weekly_minutes?: number; weekly_hours: number; session_duration_minutes?: number }): number {
+  if (row.weekly_minutes && row.weekly_minutes > 0) return row.weekly_minutes;
+  const duration = row.session_duration_minutes || 45;
+  return row.weekly_hours * duration;
+}
+
 export function validateSolverInput(input: SolverInput): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const blockGranularity = input.blockGranularityMinutes || 15;
 
   if (!input.courses.length) {
     errors.push("No hay cursos configurados.");
@@ -78,12 +87,14 @@ export function validateSolverInput(input: SolverInput): ValidationResult {
   }
 
   const sessionSlots = input.timeSlots.filter((s) => s.slot_type === "session");
-  const slotsPerWeek = countSessionSlots(sessionSlots);
+  const availableMinutes = countAvailableMinutes(sessionSlots);
   if (!sessionSlots.length) {
     errors.push("La malla horaria no tiene franjas de sesión.");
   }
 
-  const activeHours = input.courseSubjectHours.filter((h) => h.weekly_hours > 0);
+  const activeHours = input.courseSubjectHours.filter(
+    (h) => rowWeeklyMinutes(h) > 0 || h.weekly_hours > 0
+  );
   if (!activeHours.length) {
     errors.push("La matriz de horas no tiene ninguna hora asignada.");
   }
@@ -92,21 +103,45 @@ export function validateSolverInput(input: SolverInput): ValidationResult {
     return { errors, warnings };
   }
 
-  let totalDemand = 0;
+  let totalDemandMinutes = 0;
   const checkedCourses = new Set<string>();
 
   for (const row of activeHours) {
-    totalDemand += row.weekly_hours;
+    const duration = row.session_duration_minutes || 45;
+    const weeklyMinutes = rowWeeklyMinutes(row);
+    const sessionCount = sessionsNeeded(weeklyMinutes, duration);
+    totalDemandMinutes += weeklyMinutes;
+
+    if (
+      !isDurationMultipleOfGranularity(duration, blockGranularity)
+    ) {
+      warnings.push(
+        `${subjectName(input, row.subject_id)}: duración ${duration} min no es múltiplo de la granularidad (${blockGranularity} min).`
+      );
+    }
 
     if (!checkedCourses.has(row.course_id)) {
       checkedCourses.add(row.course_id);
-      const courseTotal = activeHours
+      const courseTotalMinutes = activeHours
         .filter((h) => h.course_id === row.course_id)
-        .reduce((sum, h) => sum + h.weekly_hours, 0);
+        .reduce((sum, h) => sum + rowWeeklyMinutes(h), 0);
 
-      if (slotsPerWeek > 0 && courseTotal > slotsPerWeek) {
+      if (availableMinutes > 0 && courseTotalMinutes > availableMinutes) {
         errors.push(
-          `${courseName(input, row.course_id)}: ${courseTotal}h semanales pero solo hay ${slotsPerWeek} franjas disponibles.`
+          `${courseName(input, row.course_id)}: ${Math.round(courseTotalMinutes / 60)}h semanales pero solo hay ${Math.round(availableMinutes / 60)}h de franjas disponibles.`
+        );
+      }
+
+      const courseTotalSessions = activeHours
+        .filter((h) => h.course_id === row.course_id)
+        .reduce(
+          (sum, h) =>
+            sum + sessionsNeeded(rowWeeklyMinutes(h), h.session_duration_minutes || 45),
+          0
+        );
+      if (sessionSlots.length > 0 && courseTotalSessions > sessionSlots.length) {
+        warnings.push(
+          `${courseName(input, row.course_id)}: ${courseTotalSessions} sesiones pero solo ${sessionSlots.length} bloques base.`
         );
       }
     }
@@ -117,33 +152,36 @@ export function validateSolverInput(input: SolverInput): ValidationResult {
         `${courseName(input, row.course_id)} · ${subjectName(input, row.subject_id)}: ningún profesor puede impartir esta asignatura en este curso.`
       );
     }
+
+    void sessionCount;
   }
 
-  const teacherDemand = new Map<string, number>();
+  const teacherDemandMinutes = new Map<string, number>();
   for (const row of activeHours) {
     const eligible = getEligibleTeachers(input, row.course_id, row.subject_id);
     if (eligible.length === 1) {
       const teacher = eligible[0];
-      teacherDemand.set(
+      teacherDemandMinutes.set(
         teacher.id,
-        (teacherDemand.get(teacher.id) ?? 0) + row.weekly_hours
+        (teacherDemandMinutes.get(teacher.id) ?? 0) + rowWeeklyMinutes(row)
       );
     }
   }
 
   for (const teacher of input.teachers) {
-    const demand = teacherDemand.get(teacher.id) ?? 0;
-    if (demand > teacher.max_weekly_hours) {
+    const demandMinutes = teacherDemandMinutes.get(teacher.id) ?? 0;
+    const demandHours = demandMinutes / 60;
+    if (demandHours > teacher.max_weekly_hours) {
       errors.push(
-        `${teacher.name}: la demanda mínima (${demand}h) supera su máximo semanal (${teacher.max_weekly_hours}h).`
+        `${teacher.name}: la demanda mínima (${demandHours.toFixed(1)}h) supera su máximo semanal (${teacher.max_weekly_hours}h).`
       );
     }
   }
 
-  const maxCapacity = slotsPerWeek * input.courses.length;
-  if (totalDemand > maxCapacity) {
+  const maxCapacityMinutes = availableMinutes * input.courses.length;
+  if (totalDemandMinutes > maxCapacityMinutes) {
     warnings.push(
-      `La demanda total (${totalDemand} sesiones) supera la capacidad teórica (${maxCapacity} franjas×cursos). Puede ser imposible colocar todo.`
+      `La demanda total (${Math.round(totalDemandMinutes / 60)}h) supera la capacidad teórica (${Math.round(maxCapacityMinutes / 60)}h). Puede ser imposible colocar todo.`
     );
   }
 

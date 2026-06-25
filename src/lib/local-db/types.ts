@@ -2,7 +2,9 @@ import type {
   AcademicYear,
   Course,
   CourseSubjectHours,
+  CurriculumRequirement,
   Feedback,
+  FormativeStage,
   Schedule,
   ScheduleEntry,
   School,
@@ -31,6 +33,8 @@ export interface LocalDatabase {
   timetableSettings: TimetableSettings[];
   timeSlots: TimeSlot[];
   subjects: Subject[];
+  formativeStages: FormativeStage[];
+  curriculumRequirements: CurriculumRequirement[];
   courses: Course[];
   courseSubjectHours: CourseSubjectHours[];
   teachers: Teacher[];
@@ -52,6 +56,8 @@ export function emptyDatabase(): LocalDatabase {
     timetableSettings: [],
     timeSlots: [],
     subjects: [],
+    formativeStages: [],
+    curriculumRequirements: [],
     courses: [],
     courseSubjectHours: [],
     teachers: [],

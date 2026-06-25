@@ -12,20 +12,23 @@ import type {
   TimeSlot,
   UnplacedSession,
 } from "@/types";
+import { orderBlocksByDay } from "@/lib/timetable";
+import { blocksNeeded, sessionsNeeded } from "@/lib/curriculum";
 
-interface AssignmentCandidate {
-  timeSlotId: string;
-  teacherId: string;
-}
-
-function buildDemand(hours: CourseSubjectHours[]): SessionDemand[] {
+function buildDemand(hours: CourseSubjectHours[], blockGranularity: number): SessionDemand[] {
   const demand: SessionDemand[] = [];
   for (const row of hours) {
-    for (let i = 0; i < row.weekly_hours; i++) {
+    const duration = row.session_duration_minutes || 45;
+    const weeklyMinutes = row.weekly_minutes || row.weekly_hours * duration;
+    const count = sessionsNeeded(weeklyMinutes, duration);
+    const blocks = blocksNeeded(duration, blockGranularity);
+    for (let i = 0; i < count; i++) {
       demand.push({
         courseId: row.course_id,
         subjectId: row.subject_id,
         index: i,
+        durationMinutes: duration,
+        blocksNeeded: blocks,
       });
     }
   }
@@ -74,25 +77,38 @@ function getEligibleTeachers(
   );
 }
 
-function orderSessionSlots(slots: TimeSlot[], randomize: boolean): TimeSlot[] {
-  const sessions = slots.filter((s) => s.slot_type === "session");
-  if (randomize) {
-    return [...sessions].sort(() => Math.random() - 0.5);
-  }
-  return [...sessions].sort((a, b) => {
-    if (a.day_of_week !== b.day_of_week) return a.day_of_week - b.day_of_week;
-    return a.start_time.localeCompare(b.start_time);
-  });
-}
-
-function isTeacherUnavailable(
+function isTeacherUnavailableForBlocks(
   teacherId: string,
-  timeSlotId: string,
+  blockIds: string[],
   unavailability: TeacherUnavailability[]
 ): boolean {
-  return unavailability.some(
-    (u) => u.teacher_id === teacherId && u.time_slot_id === timeSlotId
+  return blockIds.some((slotId) =>
+    unavailability.some((u) => u.teacher_id === teacherId && u.time_slot_id === slotId)
   );
+}
+
+function findBlockSequences(slots: TimeSlot[], blocksNeededCount: number): TimeSlot[][] {
+  const sequences: TimeSlot[][] = [];
+  const byDay = new Map<number, TimeSlot[]>();
+
+  for (const slot of orderBlocksByDay(slots)) {
+    const list = byDay.get(slot.day_of_week) ?? [];
+    list.push(slot);
+    byDay.set(slot.day_of_week, list);
+  }
+
+  for (const dayBlocks of byDay.values()) {
+    for (let i = 0; i <= dayBlocks.length - blocksNeededCount; i++) {
+      const slice = dayBlocks.slice(i, i + blocksNeededCount);
+      const contiguous = slice.every((block, idx) => {
+        if (idx === 0) return true;
+        return block.sort_order === slice[idx - 1].sort_order + 1;
+      });
+      if (contiguous) sequences.push(slice);
+    }
+  }
+
+  return sequences;
 }
 
 function sortDemand(demand: SessionDemand[], input: SolverInput): SessionDemand[] {
@@ -100,6 +116,7 @@ function sortDemand(demand: SessionDemand[], input: SolverInput): SessionDemand[
     const teachersA = getEligibleTeachers(input, a.courseId, a.subjectId).length;
     const teachersB = getEligibleTeachers(input, b.courseId, b.subjectId).length;
     if (teachersA !== teachersB) return teachersA - teachersB;
+    if (a.blocksNeeded !== b.blocksNeeded) return b.blocksNeeded - a.blocksNeeded;
     return a.courseId.localeCompare(b.courseId);
   });
 }
@@ -113,16 +130,13 @@ export function solveSchedule(
   }
 ): SolverResult {
   const start = Date.now();
-  const sessionSlots = orderSessionSlots(
-    input.timeSlots,
-    options?.randomizeSlots ?? false
-  );
-  const demand = sortDemand(buildDemand(input.courseSubjectHours), input);
+  const blockGranularity = input.blockGranularityMinutes || 15;
+  const sessionSlots = orderBlocksByDay(input.timeSlots);
+  const demand = sortDemand(buildDemand(input.courseSubjectHours, blockGranularity), input);
 
   const placed: PlacedSession[] = [];
-  const teacherSlotUsed = new Set<string>();
-  const courseSlotUsed = new Set<string>();
-  const teacherHours = new Map<string, number>();
+  const occupiedBlocks = new Set<string>();
+  const teacherMinutes = new Map<string, number>();
   const unplaced: UnplacedSession[] = [];
 
   const maxIterations = options?.maxIterations ?? 500_000;
@@ -150,39 +164,48 @@ export function solveSchedule(
       return backtrack(index + 1);
     }
 
-    const shuffledSlots =
-      options?.randomizeSlots === false
-        ? sessionSlots
-        : [...sessionSlots].sort(() => Math.random() - 0.5);
+    let sequences = findBlockSequences(sessionSlots, session.blocksNeeded);
+    if (options?.randomizeSlots !== false) {
+      sequences = [...sequences].sort(() => Math.random() - 0.5);
+    }
 
-    for (const slot of shuffledSlots) {
-      if (courseSlotUsed.has(`${session.courseId}:${slot.id}`)) continue;
+    for (const sequence of sequences) {
+      const blockIds = sequence.map((s) => s.id);
+      if (blockIds.some((id) => occupiedBlocks.has(`${session.courseId}:${id}`))) continue;
 
       for (const teacher of eligibleTeachers) {
-        const teacherSlotKey = `${teacher.id}:${slot.id}`;
-        if (teacherSlotUsed.has(teacherSlotKey)) continue;
-        if (isTeacherUnavailable(teacher.id, slot.id, input.teacherUnavailability))
+        if (isTeacherUnavailableForBlocks(teacher.id, blockIds, input.teacherUnavailability))
           continue;
 
-        const currentHours = teacherHours.get(teacher.id) ?? 0;
-        if (currentHours >= teacher.max_weekly_hours) continue;
+        const currentMinutes = teacherMinutes.get(teacher.id) ?? 0;
+        const nextMinutes = currentMinutes + session.durationMinutes;
+        if (nextMinutes > teacher.max_weekly_hours * 60) continue;
+
+        if (blockIds.some((id) => occupiedBlocks.has(`${teacher.id}:${id}`))) continue;
 
         placed.push({
           courseId: session.courseId,
           subjectId: session.subjectId,
           teacherId: teacher.id,
-          timeSlotId: slot.id,
+          timeSlotId: sequence[0].id,
+          durationMinutes: session.durationMinutes,
+          blockSlotIds: blockIds,
         });
-        teacherSlotUsed.add(teacherSlotKey);
-        courseSlotUsed.add(`${session.courseId}:${slot.id}`);
-        teacherHours.set(teacher.id, currentHours + 1);
+
+        for (const id of blockIds) {
+          occupiedBlocks.add(`${session.courseId}:${id}`);
+          occupiedBlocks.add(`${teacher.id}:${id}`);
+        }
+        teacherMinutes.set(teacher.id, nextMinutes);
 
         if (backtrack(index + 1)) return true;
 
         placed.pop();
-        teacherSlotUsed.delete(teacherSlotKey);
-        courseSlotUsed.delete(`${session.courseId}:${slot.id}`);
-        teacherHours.set(teacher.id, currentHours);
+        for (const id of blockIds) {
+          occupiedBlocks.delete(`${session.courseId}:${id}`);
+          occupiedBlocks.delete(`${teacher.id}:${id}`);
+        }
+        teacherMinutes.set(teacher.id, currentMinutes);
       }
     }
 
@@ -198,7 +221,7 @@ export function solveSchedule(
 
   const finalUnplaced = unplaced.filter((u, i, arr) => {
     const key = `${u.courseId}:${u.subjectId}:${u.reason}`;
-  const firstIndex = arr.findIndex(
+    const firstIndex = arr.findIndex(
       (x) => `${x.courseId}:${x.subjectId}:${x.reason}` === key
     );
     if (firstIndex !== i) return false;

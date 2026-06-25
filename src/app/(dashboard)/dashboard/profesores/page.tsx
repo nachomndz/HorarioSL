@@ -10,6 +10,7 @@ import type { Teacher } from "@/types";
 import { CYCLE_LABELS } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
 import { ConfigGuide } from "@/components/layout/config-guide";
+import { NextStepBanner } from "@/components/layout/next-step-banner";
 import { PageLoadingSkeleton, TableLoadingSkeleton } from "@/components/layout/loading-skeletons";
 import { ConfirmDialog } from "@/components/layout/confirm-dialog";
 import { EmptyState } from "@/components/layout/empty-state";
@@ -102,6 +103,34 @@ export default function TeachersPage() {
     }
   }
 
+  async function saveTeacherName(teacher: Teacher) {
+    const name = teacher.name.trim();
+    if (!name) {
+      toast.error("El nombre no puede estar vacío");
+      return;
+    }
+
+    if (isLocalMode()) {
+      const { error } = localDb.renameTeacher(teacher.id, name);
+      if (error) {
+        toast.error(error);
+        return;
+      }
+      toast.success("Nombre guardado");
+      return;
+    }
+
+    const { createClient } = await import("@/lib/supabase/client");
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("teachers")
+      .update({ name })
+      .eq("id", teacher.id);
+
+    if (error) toast.error(error.message);
+    else toast.success("Nombre guardado");
+  }
+
   async function deleteTeacher(id: string) {
     if (isLocalMode()) {
       localDb.deleteTeacher(id);
@@ -164,7 +193,7 @@ export default function TeachersPage() {
       </PageHeader>
 
       {isAdmin && (
-        <Card>
+        <Card data-tour="profesores-add">
           <CardHeader>
             <CardTitle className="text-base">Nuevo profesor</CardTitle>
           </CardHeader>
@@ -214,7 +243,38 @@ export default function TeachersPage() {
             <tbody>
               {filtered.map((teacher) => (
                 <tr key={teacher.id} className="border-b last:border-0 hover:bg-muted/30">
-                  <td className="px-4 py-3 font-medium">{teacher.name}</td>
+                  <td className="px-4 py-3">
+                    {isAdmin ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Input
+                          value={teacher.name}
+                          onChange={(e) =>
+                            setTeachers((prev) =>
+                              prev.map((t) =>
+                                t.id === teacher.id ? { ...t, name: e.target.value } : t
+                              )
+                            )
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              saveTeacherName(teacher);
+                            }
+                          }}
+                          className="max-w-xs"
+                        />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => saveTeacherName(teacher)}
+                        >
+                          Guardar
+                        </Button>
+                      </div>
+                    ) : (
+                      <span className="font-medium">{teacher.name}</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">{teacher.max_weekly_hours}h/sem</td>
                   <td className="px-4 py-3">
                     <Badge variant="secondary">{scopeLabel(teacher)}</Badge>
@@ -253,6 +313,8 @@ export default function TeachersPage() {
         confirmLabel="Eliminar"
         onConfirm={() => deleteId && deleteTeacher(deleteId)}
       />
+
+      <NextStepBanner />
     </div>
   );
 }

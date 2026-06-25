@@ -15,6 +15,14 @@ import { PageHeader } from "@/components/layout/page-header";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
 import { ConfirmDialog } from "@/components/layout/confirm-dialog";
 import { EmptyState } from "@/components/layout/empty-state";
+import { ConfigGuide } from "@/components/layout/config-guide";
+import { NextStepBanner } from "@/components/layout/next-step-banner";
+import { SetupPreflightChecklist } from "@/components/layout/setup-preflight";
+import { ValidationReport } from "@/components/layout/validation-report";
+import { SectionHint } from "@/components/ui/section-hint";
+import { SETUP_STEPS, isStepDone } from "@/lib/onboarding/steps";
+import { useSetupStatus } from "@/hooks/use-setup-status";
+import type { ValidationResult } from "@/lib/solver/validate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +40,8 @@ export default function SchedulesPage() {
   const [progress, setProgress] = useState(0);
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const { status: setupStatus } = useSetupStatus();
 
   useEffect(() => {
     loadData();
@@ -98,18 +108,14 @@ export default function SchedulesPage() {
       return;
     }
 
-    const validation = validateSolverInput(input);
-    if (validation.errors.length > 0) {
+    const validationResult = validateSolverInput(input);
+    if (validationResult.errors.length > 0) {
+      setValidation(validationResult);
       setGenerating(false);
-      toast.error(validation.errors.slice(0, 3).join(" · "), {
-        description:
-          validation.errors.length > 3
-            ? `Y ${validation.errors.length - 3} error(es) más`
-            : undefined,
-      });
       return;
     }
-    for (const warning of validation.warnings) {
+    setValidation(null);
+    for (const warning of validationResult.warnings) {
       toast.warning(warning);
     }
 
@@ -172,6 +178,7 @@ export default function SchedulesPage() {
           subject_id: e.subjectId,
           course_id: e.courseId,
           time_slot_id: e.timeSlotId,
+          duration_minutes: e.durationMinutes,
         }))
       );
       if (entriesError) {
@@ -269,30 +276,46 @@ export default function SchedulesPage() {
 
   if (loading) return <PageLoadingSkeleton />;
 
+  const incompleteSteps = SETUP_STEPS.filter(
+    (s) => s.id !== "horario" && !isStepDone(s, setupStatus)
+  );
+
   return (
     <div className="space-y-6">
+      <ConfigGuide />
+
       <PageHeader
         title="Horarios"
         description={`Genera y gestiona los horarios del curso ${activeYear?.name ?? "—"}.`}
       />
 
       {isAdmin && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Generar nuevo horario</CardTitle>
-            <CardDescription>
-              El motor intentará colocar todas las sesiones respetando las restricciones.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Input
-              value={scheduleName}
-              onChange={(e) => setScheduleName(e.target.value)}
-              placeholder="Nombre del horario"
-            />
-            <Button onClick={handleGenerate} disabled={generating || !activeYear}>
-              {generating ? `Generando... ${progress}%` : "Generar horario"}
-            </Button>
+        <>
+          <SetupPreflightChecklist />
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                Generar nuevo horario
+                <SectionHint label="El motor coloca sesiones respetando malla, horas y disponibilidad. Si quedan sesiones sin colocar, podrás revisarlas después." />
+              </CardTitle>
+              <CardDescription>
+                El motor intentará colocar todas las sesiones respetando las restricciones.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {validation && <ValidationReport result={validation} />}
+              <Input
+                value={scheduleName}
+                onChange={(e) => setScheduleName(e.target.value)}
+                placeholder="Nombre del horario"
+              />
+              <Button
+                data-tour="horarios-generate"
+                onClick={handleGenerate}
+                disabled={generating || !activeYear}
+              >
+                {generating ? `Generando... ${progress}%` : "Generar horario"}
+              </Button>
             {generating && (
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div
@@ -303,6 +326,7 @@ export default function SchedulesPage() {
             )}
           </CardContent>
         </Card>
+        </>
       )}
 
       <Card>
@@ -314,7 +338,19 @@ export default function SchedulesPage() {
             <EmptyState
               icon={Calendar}
               title="Sin horarios"
-              description="Genera el primer horario cuando tengas cursos, asignaturas y profesores configurados."
+              description={
+                incompleteSteps.length > 0
+                  ? `Te faltan ${incompleteSteps.length} paso${incompleteSteps.length !== 1 ? "s" : ""} de configuración antes de generar el primer horario.`
+                  : "Genera el primer horario cuando tengas todo configurado."
+              }
+              actionHref={
+                incompleteSteps.length > 0 ? incompleteSteps[0].href : undefined
+              }
+              actionLabel={
+                incompleteSteps.length > 0
+                  ? `Ir a ${incompleteSteps[0].label}`
+                  : undefined
+              }
             />
           ) : (
             schedules.map((schedule) => (
@@ -376,6 +412,8 @@ export default function SchedulesPage() {
         confirmLabel="Eliminar"
         onConfirm={() => deleteId && deleteSchedule(deleteId)}
       />
+
+      <NextStepBanner />
     </div>
   );
 }

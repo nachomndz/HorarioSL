@@ -8,26 +8,39 @@ import {
   BookOpen,
   Calendar,
   GraduationCap,
+  HelpCircle,
+  Layers,
   LayoutDashboard,
   LogOut,
   MessageSquare,
   Settings,
+  Table,
   Users,
   UserCog,
 } from "lucide-react";
+import { SETUP_STEPS, isStepDone } from "@/lib/onboarding/steps";
+import { useSetupStatus } from "@/hooks/use-setup-status";
+import { useTour } from "@/components/onboarding/onboarding-tour";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 const configNav = [
-  { href: "/dashboard/configuracion/malla", label: "Malla horaria", icon: Settings },
-  { href: "/dashboard/cursos", label: "Cursos", icon: GraduationCap },
-  { href: "/dashboard/asignaturas", label: "Asignaturas", icon: BookOpen },
-  { href: "/dashboard/profesores", label: "Profesores", icon: Users },
+  { href: "/dashboard/configuracion/malla", label: "Malla horaria", icon: Settings, stepId: "malla" },
+  { href: "/dashboard/configuracion/etapas", label: "Subciclos", icon: Layers, stepId: "etapas" },
+  {
+    href: "/dashboard/configuracion/curriculum",
+    label: "Currículo",
+    icon: Table,
+    stepId: "curriculum",
+  },
+  { href: "/dashboard/cursos", label: "Cursos", icon: GraduationCap, stepId: "cursos" },
+  { href: "/dashboard/asignaturas", label: "Asignaturas", icon: BookOpen, stepId: "asignaturas" },
+  { href: "/dashboard/profesores", label: "Profesores", icon: Users, stepId: "profesores" },
 ];
 
 const mainNav = [
   { href: "/dashboard", label: "Inicio", icon: LayoutDashboard },
-  { href: "/dashboard/horarios", label: "Horarios", icon: Calendar },
+  { href: "/dashboard/horarios", label: "Horarios", icon: Calendar, stepId: "horario" },
   { href: "/dashboard/sugerencias", label: "Sugerencias", icon: MessageSquare },
 ];
 
@@ -36,11 +49,13 @@ function NavLink({
   label,
   icon: Icon,
   active,
+  incomplete,
 }: {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   active: boolean;
+  incomplete?: boolean;
 }) {
   return (
     <Link
@@ -53,7 +68,10 @@ function NavLink({
       )}
     >
       <Icon className="h-4 w-4" />
-      {label}
+      <span className="flex-1">{label}</span>
+      {incomplete && (
+        <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-label="Pendiente" />
+      )}
     </Link>
   );
 }
@@ -61,9 +79,17 @@ function NavLink({
 export function Sidebar({ schoolName, isAdmin }: { schoolName: string; isAdmin: boolean }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { status } = useSetupStatus();
+  const { startTour } = useTour();
 
   const isActive = (href: string) =>
     pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`));
+
+  function stepIncomplete(stepId: string) {
+    const step = SETUP_STEPS.find((s) => s.id === stepId);
+    if (!step || !status) return false;
+    return !isStepDone(step, status);
+  }
 
   async function handleLogout() {
     if (isLocalMode()) localDb.logout();
@@ -101,13 +127,18 @@ export function Sidebar({ schoolName, isAdmin }: { schoolName: string; isAdmin: 
           ))}
         </div>
 
-        <div>
+        <div id="nav-config">
           <p className="mb-1 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Configuración
           </p>
           <div className="space-y-1">
             {configNav.map((item) => (
-              <NavLink key={item.href} {...item} active={isActive(item.href)} />
+              <NavLink
+                key={item.href}
+                {...item}
+                active={isActive(item.href)}
+                incomplete={isAdmin && stepIncomplete(item.stepId)}
+              />
             ))}
           </div>
         </div>
@@ -118,7 +149,14 @@ export function Sidebar({ schoolName, isAdmin }: { schoolName: string; isAdmin: 
           </p>
           <div className="space-y-1">
             {mainNav.slice(1).map((item) => (
-              <NavLink key={item.href} {...item} active={isActive(item.href)} />
+              <NavLink
+                key={item.href}
+                {...item}
+                active={isActive(item.href)}
+                incomplete={
+                  isAdmin && item.stepId ? stepIncomplete(item.stepId) : false
+                }
+              />
             ))}
           </div>
         </div>
@@ -133,7 +171,13 @@ export function Sidebar({ schoolName, isAdmin }: { schoolName: string; isAdmin: 
         )}
       </nav>
 
-      <div className="border-t p-4">
+      <div className="space-y-1 border-t p-4">
+        {isAdmin && (
+          <Button variant="ghost" className="w-full justify-start" onClick={startTour}>
+            <HelpCircle className="h-4 w-4" />
+            Ver guía
+          </Button>
+        )}
         <Button variant="ghost" className="w-full justify-start" onClick={handleLogout}>
           <LogOut className="h-4 w-4" />
           Cerrar sesión

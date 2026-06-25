@@ -5,6 +5,7 @@
  */
 import { readFileSync } from "fs";
 import { createClient } from "@supabase/supabase-js";
+import { seedPrimariaAnexo } from "./lib/seed-primaria-anexo.mjs";
 
 const EMAIL = "sanlorenzo@horariosl.app";
 const PASSWORD = "12456@SL";
@@ -112,9 +113,21 @@ async function main() {
       console.error("Error en seed_school_defaults:", seedError.message);
       process.exit(1);
     }
-    console.log("Datos iniciales sembrados (cursos, asignaturas, malla...)");
+    console.log("Datos iniciales sembrados (cursos, malla...)");
   } else {
-    console.log("El colegio ya tiene datos, seed omitido");
+    console.log("El colegio ya tiene cursos, seed_school_defaults omitido");
+  }
+
+  try {
+    const primaria = await seedPrimariaAnexo(admin, schoolId);
+    if (primaria.skipped) {
+      console.log("Currículo Anexo IV Primaria ya existía, seed omitido");
+    } else {
+      console.log("Currículo Anexo IV Primaria sembrado (asignaturas, horas, matriz)");
+    }
+  } catch (e) {
+    console.error("Error en seed Primaria Anexo IV:", e.message);
+    process.exit(1);
   }
 
   console.log("\nListo. Inicia sesión con:");

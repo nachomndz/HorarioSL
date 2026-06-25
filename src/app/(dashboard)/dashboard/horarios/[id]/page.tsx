@@ -205,6 +205,7 @@ export default function ScheduleDetailPage() {
           subject_id: e.subjectId,
           course_id: e.courseId,
           time_slot_id: e.timeSlotId,
+          duration_minutes: e.durationMinutes,
         }))
       );
     }

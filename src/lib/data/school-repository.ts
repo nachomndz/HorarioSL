@@ -2,60 +2,25 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   Course,
   CourseSubjectHours,
+  CurriculumRequirement,
   Cycle,
+  FormativeStage,
   RecessConfig,
   Subject,
   TimeSlot,
   TimetableSettings,
 } from "@/types";
-
-const HOURS_BY_CYCLE: Record<Cycle, Record<string, number>> = {
-  infantil: {
-    "Lengua Castellana": 4,
-    Matemáticas: 3,
-    Inglés: 2,
-    "Educación Física": 2,
-    Plástica: 2,
-    Música: 2,
-    Valores: 2,
-  },
-  primaria: {
-    "Lengua Castellana": 5,
-    Matemáticas: 4,
-    Inglés: 3,
-    "Ciencias Naturales": 2,
-    "Ciencias Sociales": 2,
-    "Educación Física": 2,
-    Plástica: 1,
-    Música: 1,
-    Religión: 1,
-    Valores: 1,
-  },
-  secundaria: {
-    "Lengua Castellana": 4,
-    Matemáticas: 4,
-    Inglés: 3,
-    "Ciencias Naturales": 3,
-    "Ciencias Sociales": 3,
-    "Educación Física": 2,
-    Plástica: 1,
-    Música: 1,
-    Religión: 1,
-    Valores: 1,
-  },
-  diversificacion: {
-    "Lengua Castellana": 4,
-    Matemáticas: 3,
-    Inglés: 2,
-    "Ciencias Naturales": 2,
-    "Ciencias Sociales": 2,
-    "Educación Física": 3,
-    Plástica: 1,
-    Música: 1,
-    Religión: 1,
-    Valores: 1,
-  },
-};
+import { courseHoursFromRequirement } from "@/lib/curriculum";
+import {
+  buildPrimariaAnexoSeed,
+  hasPrimariaCurriculum,
+} from "@/lib/curriculum/seed-primaria";
+import {
+  DEFAULT_STAGES_BY_CYCLE,
+  DEFAULT_PRIMARIA_ELECTIVES,
+  inferStageIndexForCourse,
+  type PrimariaElectiveChoices,
+} from "@/lib/curriculum/templates";
 import { generateTimeSlots, countSessionSlots } from "@/lib/timetable";
 import { DEFAULT_COURSES_TEMPLATE } from "@/lib/utils";
 
@@ -64,6 +29,7 @@ export type TimetableSettingsInput = {
   day_start: string;
   day_end: string;
   session_duration_minutes: number;
+  block_granularity_minutes: number;
   recesses: RecessConfig[];
 };
 
@@ -93,7 +59,7 @@ export async function fetchCourses(schoolId: string): Promise<Course[]> {
 
 export async function updateCourse(
   courseId: string,
-  data: { name?: string; cycle?: Cycle }
+  data: { name?: string; cycle?: Cycle; formative_stage_id?: string | null }
 ): Promise<{ error?: string }> {
   const supabase = await getClient();
   const { error } = await supabase.from("courses").update(data).eq("id", courseId);
@@ -104,7 +70,8 @@ export async function updateCourse(
 export async function addCourse(
   schoolId: string,
   name: string,
-  cycle: Cycle
+  cycle: Cycle,
+  formativeStageId?: string | null
 ): Promise<{ course?: Course; error?: string }> {
   const supabase = await getClient();
   const courses = await fetchCourses(schoolId);
@@ -115,6 +82,7 @@ export async function addCourse(
       school_id: schoolId,
       name: name.trim(),
       cycle,
+      formative_stage_id: formativeStageId ?? null,
       sort_order: maxOrder + 1,
     })
     .select()
@@ -182,6 +150,7 @@ export async function seedDefaultCourses(
   }));
   const { error } = await supabase.from("courses").insert(rows);
   if (error) return { error: error.message };
+  await assignDefaultStagesToCourses(schoolId);
   return {};
 }
 
@@ -203,6 +172,7 @@ export async function fetchTimetableSettings(
     day_start: toFormTime(row.day_start),
     day_end: toFormTime(row.day_end),
     session_duration_minutes: row.session_duration_minutes,
+    block_granularity_minutes: row.block_granularity_minutes ?? 15,
     recesses: row.recesses as RecessConfig[],
   };
 }
@@ -217,6 +187,7 @@ export async function saveTimetableSettings(
     day_start: normalizeTime(settings.day_start),
     day_end: normalizeTime(settings.day_end),
     session_duration_minutes: settings.session_duration_minutes,
+    block_granularity_minutes: settings.block_granularity_minutes,
     recesses: settings.recesses,
     updated_at: new Date().toISOString(),
   };
@@ -246,6 +217,7 @@ export async function saveTimetableSettings(
     day_start: settings.day_start,
     day_end: settings.day_end,
     session_duration_minutes: settings.session_duration_minutes,
+    block_granularity_minutes: settings.block_granularity_minutes,
     recesses: settings.recesses,
   });
 
@@ -260,6 +232,7 @@ export async function saveTimetableSettings(
         end_time: s.end_time,
         slot_type: s.slot_type,
         sort_order: s.sort_order,
+        duration_minutes: s.duration_minutes,
       }))
     );
     if (slotsError) return { slotCount: 0, error: slotsError.message };
@@ -337,10 +310,27 @@ export async function deleteSubject(subjectId: string): Promise<{ error?: string
 }
 
 export async function upsertCourseSubjectHours(
-  rows: { course_id: string; subject_id: string; weekly_hours: number }[]
+  rows: {
+    course_id: string;
+    subject_id: string;
+    weekly_hours: number;
+    weekly_minutes?: number;
+    session_duration_minutes?: number;
+  }[]
 ): Promise<{ error?: string }> {
   const supabase = await getClient();
-  const { error } = await supabase.from("course_subject_hours").upsert(rows, {
+  const payload = rows.map((r) => {
+    const duration = r.session_duration_minutes ?? 45;
+    const weeklyMinutes = r.weekly_minutes ?? r.weekly_hours * duration;
+    return {
+      course_id: r.course_id,
+      subject_id: r.subject_id,
+      weekly_hours: r.weekly_hours,
+      weekly_minutes: weeklyMinutes,
+      session_duration_minutes: duration,
+    };
+  });
+  const { error } = await supabase.from("course_subject_hours").upsert(payload, {
     onConflict: "course_id,subject_id",
   });
   if (error) return { error: error.message };
@@ -383,22 +373,273 @@ export async function seedDefaultSubjects(
 }
 
 export async function seedDefaultHours(schoolId: string): Promise<{ error?: string }> {
-  const { courses, subjects } = await fetchSubjectsData(schoolId);
-  if (!courses.length || !subjects.length) {
-    return { error: "Configura cursos y asignaturas antes de cargar horas de ejemplo" };
-  }
+  const result = await seedPrimariaInitialData(schoolId);
+  if (result.error) return result;
+  return {};
+}
 
-  const rows: { course_id: string; subject_id: string; weekly_hours: number }[] = [];
+// --- Formative stages & curriculum ---
+
+export async function fetchFormativeStages(schoolId: string): Promise<FormativeStage[]> {
+  const supabase = await getClient();
+  const { data, error } = await supabase
+    .from("formative_stages")
+    .select("*")
+    .eq("school_id", schoolId)
+    .order("sort_order");
+  if (error) throw new Error(error.message);
+  return (data as FormativeStage[]) ?? [];
+}
+
+export async function fetchFormativeStagesByCycle(
+  schoolId: string,
+  cycle: Cycle
+): Promise<FormativeStage[]> {
+  const stages = await fetchFormativeStages(schoolId);
+  return stages.filter((s) => s.cycle === cycle);
+}
+
+export async function addFormativeStage(
+  schoolId: string,
+  cycle: Cycle,
+  name: string
+): Promise<{ stage?: FormativeStage; error?: string }> {
+  const supabase = await getClient();
+  const existing = await fetchFormativeStagesByCycle(schoolId, cycle);
+  const { data, error } = await supabase
+    .from("formative_stages")
+    .insert({
+      school_id: schoolId,
+      cycle,
+      name: name.trim(),
+      sort_order: existing.length + 1,
+    })
+    .select()
+    .single();
+  if (error) return { error: error.message };
+  return { stage: data as FormativeStage };
+}
+
+export async function updateFormativeStage(
+  stageId: string,
+  data: { name?: string; sort_order?: number }
+): Promise<{ error?: string }> {
+  const supabase = await getClient();
+  const { error } = await supabase.from("formative_stages").update(data).eq("id", stageId);
+  if (error) return { error: error.message };
+  return {};
+}
+
+export async function deleteFormativeStage(stageId: string): Promise<{ error?: string }> {
+  const supabase = await getClient();
+  await supabase.from("courses").update({ formative_stage_id: null }).eq("formative_stage_id", stageId);
+  const { error } = await supabase.from("formative_stages").delete().eq("id", stageId);
+  if (error) return { error: error.message };
+  return {};
+}
+
+export async function seedDefaultFormativeStages(schoolId: string): Promise<{ error?: string }> {
+  const supabase = await getClient();
+  const existing = await fetchFormativeStages(schoolId);
+  if (existing.length > 0) return {};
+
+  const rows = (Object.entries(DEFAULT_STAGES_BY_CYCLE) as [Cycle, typeof DEFAULT_STAGES_BY_CYCLE[Cycle]][]).flatMap(
+    ([cycle, templates]) =>
+      templates.map((t) => ({
+        school_id: schoolId,
+        cycle,
+        name: t.name,
+        sort_order: t.sortOrder,
+      }))
+  );
+  const { error } = await supabase.from("formative_stages").insert(rows);
+  if (error) return { error: error.message };
+  return {};
+}
+
+export async function assignDefaultStagesToCourses(schoolId: string): Promise<void> {
+  const courses = await fetchCourses(schoolId);
+  const stages = await fetchFormativeStages(schoolId);
+  if (!stages.length) return;
+
+  const supabase = await getClient();
   for (const course of courses) {
-    const template = HOURS_BY_CYCLE[course.cycle];
-    for (const subject of subjects) {
-      const weekly_hours = template[subject.name] ?? 0;
-      if (weekly_hours > 0) {
-        rows.push({ course_id: course.id, subject_id: subject.id, weekly_hours });
-      }
+    if (course.formative_stage_id) continue;
+    const cycleStages = stages
+      .filter((s) => s.cycle === course.cycle)
+      .sort((a, b) => a.sort_order - b.sort_order);
+    const idx = inferStageIndexForCourse(course.name, course.cycle);
+    const stage = cycleStages[idx] ?? cycleStages[0];
+    if (stage) {
+      await supabase.from("courses").update({ formative_stage_id: stage.id }).eq("id", course.id);
     }
   }
+}
+
+export async function fetchCurriculumRequirements(
+  formativeStageId: string
+): Promise<CurriculumRequirement[]> {
+  const supabase = await getClient();
+  const { data, error } = await supabase
+    .from("curriculum_requirements")
+    .select("*")
+    .eq("formative_stage_id", formativeStageId);
+  if (error) throw new Error(error.message);
+  return (data as CurriculumRequirement[]) ?? [];
+}
+
+export async function fetchCurriculumMatrix(schoolId: string, cycle: Cycle) {
+  const stages = await fetchFormativeStagesByCycle(schoolId, cycle);
+  const supabase = await getClient();
+  const { data: subjects } = await supabase
+    .from("subjects")
+    .select("*")
+    .eq("school_id", schoolId)
+    .order("name");
+
+  const requirements: CurriculumRequirement[] = [];
+  for (const stage of stages) {
+    requirements.push(...(await fetchCurriculumRequirements(stage.id)));
+  }
+
+  return {
+    stages,
+    subjects: ((subjects as Subject[]) ?? []).filter(
+      (s) => !s.applicable_cycles?.length || s.applicable_cycles.includes(cycle)
+    ),
+    requirements,
+  };
+}
+
+export async function upsertCurriculumRequirement(
+  formativeStageId: string,
+  subjectId: string,
+  data: {
+    mandatory_weekly_hours: number;
+    session_duration_minutes: number;
+    elective_group_id?: string | null;
+  }
+): Promise<{ error?: string }> {
+  const supabase = await getClient();
+  const { error } = await supabase.from("curriculum_requirements").upsert(
+    {
+      formative_stage_id: formativeStageId,
+      subject_id: subjectId,
+      mandatory_weekly_hours: data.mandatory_weekly_hours,
+      session_duration_minutes: data.session_duration_minutes,
+      elective_group_id: data.elective_group_id ?? null,
+    },
+    { onConflict: "formative_stage_id,subject_id" }
+  );
+  if (error) return { error: error.message };
+  return {};
+}
+
+async function persistPrimariaAnexoSeed(
+  schoolId: string,
+  choices: PrimariaElectiveChoices = DEFAULT_PRIMARIA_ELECTIVES
+): Promise<{ error?: string }> {
+  await seedDefaultFormativeStages(schoolId);
+  const stages = await fetchFormativeStages(schoolId);
+  const supabase = await getClient();
+  const { data: subjects } = await supabase.from("subjects").select("*").eq("school_id", schoolId);
+  const subjectList = (subjects as Subject[]) ?? [];
+
+  let seed;
+  try {
+    seed = buildPrimariaAnexoSeed(schoolId, stages, subjectList, choices);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Error al cargar Anexo IV" };
+  }
+
+  if (seed.subjects.length > 0) {
+    const { error } = await supabase.from("subjects").insert(
+      seed.subjects.map((s) => ({
+        school_id: s.school_id,
+        name: s.name,
+        short_name: s.short_name,
+        color: s.color,
+        applicable_cycles: s.applicable_cycles,
+      }))
+    );
+    if (error) return { error: error.message };
+  }
+
+  for (const req of seed.requirements) {
+    const result = await upsertCurriculumRequirement(req.formative_stage_id, req.subject_id, {
+      mandatory_weekly_hours: Number(req.mandatory_weekly_hours),
+      session_duration_minutes: req.session_duration_minutes,
+      elective_group_id: req.elective_group_id,
+    });
+    if (result.error) return result;
+  }
+
+  await assignDefaultStagesToCourses(schoolId);
+  const primariaStages = stages
+    .filter((s) => s.cycle === "primaria")
+    .sort((a, b) => a.sort_order - b.sort_order);
+  for (const stage of primariaStages) {
+    const result = await applyCurriculumToStage(stage.id);
+    if (result.error) return result;
+  }
+
+  return {};
+}
+
+export async function seedPrimariaInitialData(
+  schoolId: string
+): Promise<{ error?: string; skipped?: boolean }> {
+  await seedDefaultFormativeStages(schoolId);
+  const stages = await fetchFormativeStages(schoolId);
+  const supabase = await getClient();
+  const { data: requirements } = await supabase.from("curriculum_requirements").select("*");
+  const reqList = (requirements as CurriculumRequirement[]) ?? [];
+  const schoolStageIds = new Set(stages.filter((s) => s.school_id === schoolId).map((s) => s.id));
+  const schoolReqs = reqList.filter((r) => schoolStageIds.has(r.formative_stage_id));
+
+  if (hasPrimariaCurriculum(stages, schoolReqs)) {
+    return { skipped: true };
+  }
+
+  return persistPrimariaAnexoSeed(schoolId, DEFAULT_PRIMARIA_ELECTIVES);
+}
+
+export async function loadPrimariaAnexoTemplate(
+  schoolId: string,
+  choices: PrimariaElectiveChoices = DEFAULT_PRIMARIA_ELECTIVES
+): Promise<{ error?: string }> {
+  return persistPrimariaAnexoSeed(schoolId, choices);
+}
+
+export async function applyCurriculumToCourse(
+  courseId: string
+): Promise<{ error?: string }> {
+  const supabase = await getClient();
+  const { data: course } = await supabase.from("courses").select("*").eq("id", courseId).single();
+  if (!course) return { error: "Curso no encontrado" };
+  if (!course.formative_stage_id) return { error: "Asigna un subciclo al curso primero" };
+
+  const requirements = await fetchCurriculumRequirements(course.formative_stage_id);
+  const rows = requirements
+    .filter((r) => Number(r.mandatory_weekly_hours) > 0)
+    .map((r) => courseHoursFromRequirement(courseId, r));
+
   return upsertCourseSubjectHours(rows);
+}
+
+export async function applyCurriculumToStage(
+  formativeStageId: string
+): Promise<{ error?: string }> {
+  const supabase = await getClient();
+  const { data: courses } = await supabase
+    .from("courses")
+    .select("id")
+    .eq("formative_stage_id", formativeStageId);
+  for (const course of courses ?? []) {
+    const result = await applyCurriculumToCourse(course.id);
+    if (result.error) return result;
+  }
+  return {};
 }
 
 export async function fetchSetupStatus(schoolId: string) {
@@ -422,6 +663,8 @@ export async function fetchSetupStatus(schoolId: string) {
     { count: schedules },
     { count: courses },
     { count: subjects },
+    { count: stages },
+    { count: curriculum },
   ] = await Promise.all([
     supabase
       .from("time_slots")
@@ -445,6 +688,14 @@ export async function fetchSetupStatus(schoolId: string) {
       .from("subjects")
       .select("*", { count: "exact", head: true })
       .eq("school_id", schoolId),
+    supabase
+      .from("formative_stages")
+      .select("*", { count: "exact", head: true })
+      .eq("school_id", schoolId),
+    supabase
+      .from("curriculum_requirements")
+      .select("*", { count: "exact", head: true })
+      .gt("mandatory_weekly_hours", 0),
   ]);
 
   return {
@@ -455,5 +706,7 @@ export async function fetchSetupStatus(schoolId: string) {
     hasSchedule: (schedules ?? 0) > 0,
     courseCount: courses ?? 0,
     subjectCount: subjects ?? 0,
+    hasStages: (stages ?? 0) > 0,
+    hasCurriculum: (curriculum ?? 0) > 0,
   };
 }

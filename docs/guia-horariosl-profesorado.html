@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>HorarioSL — Guía para el profesorado</title>
+  <style>
+    @page { margin: 2cm; }
+    body { font-family: Georgia, "Times New Roman", serif; font-size: 11pt; line-height: 1.45; color: #1a1a1a; max-width: 700px; margin: 0 auto; }
+    h1 { font-size: 22pt; color: #1e3a5f; border-bottom: 2px solid #2563eb; padding-bottom: 8px; margin-top: 0; }
+    h2 { font-size: 14pt; color: #1e3a5f; margin-top: 1.4em; page-break-after: avoid; }
+    h3 { font-size: 12pt; color: #334155; margin-top: 1em; }
+    .subtitle { color: #64748b; font-size: 12pt; margin-bottom: 1.5em; }
+    .lead { background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 16px; margin: 1em 0; }
+    .important { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 10px 14px; margin: 1em 0; font-size: 10.5pt; }
+    table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 10pt; }
+    th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #f1f5f9; font-weight: bold; }
+    ul { padding-left: 1.2em; }
+    li { margin: 0.35em 0; }
+    .flow { font-family: monospace; background: #f8fafc; padding: 14px; border-radius: 6px; font-size: 10pt; line-height: 1.6; white-space: pre-line; }
+    .form-table td { height: 28px; }
+    .footer { margin-top: 2em; font-size: 9pt; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 12px; }
+    .page-break { page-break-before: always; }
+  </style>
+</head>
+<body>
+
+<h1>HorarioSL</h1>
+<p class="subtitle"><strong>Guía para el profesorado</strong><br />Colegio San Lorenzo — Cómo se configura y genera el horario escolar</p>
+
+<div class="lead">
+  <strong>¿Qué es HorarioSL?</strong> Es la herramienta del colegio para organizar el horario de todas las clases de forma automática. No es una agenda personal: es el cuadrante oficial de <em>quién imparte qué asignatura, en qué curso y en qué franja horaria</em>.
+</div>
+
+<p>La configuración la realiza normalmente <strong>dirección o jefatura de estudios</strong>. Para cada profesor lo decisivo es <strong>cómo está dado de alta en el sistema</strong>, porque eso determina el horario que se genera.</p>
+
+<h2>La idea en una frase</h2>
+<p>El programa necesita saber:</p>
+<ol>
+  <li><strong>Cuántas horas</strong> hay que colocar en cada curso.</li>
+  <li><strong>En qué huecos</strong> del día pueden ir las clases.</li>
+  <li><strong>Qué profesor</strong> puede impartir cada asignatura y <strong>cuándo no está disponible</strong>.</li>
+</ol>
+
+<h2>Los 7 pasos de configuración</h2>
+
+<h3>1. Malla horaria — «¿Cómo es el día del cole?»</h3>
+<p>Se define la estructura de la jornada: días lectivos, hora de entrada y salida, recreos y bloques horarios.</p>
+<p><strong>Para el profesorado:</strong> marca cuántos huecos hay a la semana y a qué horas pueden caer las clases.</p>
+<div class="important"><strong>Importante:</strong> si se cambia la malla, hay que volver a revisar la disponibilidad de los profesores.</div>
+
+<h3>2. Subciclos — «¿Qué cursos comparten el mismo currículo?»</h3>
+<p>Ejemplo en Primaria: 1.º+2.º, 3.º+4.º, 5.º+6.º. Define qué horas obligatorias se aplican a cada grupo de cursos.</p>
+
+<h3>3. Currículo obligatorio — «¿Cuántas horas marca la ley?»</h3>
+<p>Tabla de horas semanales por asignatura y subciclo (en Primaria, referencia Anexo IV). También la duración de cada clase (45 min, 60 min…).</p>
+<p><strong>Para el profesorado:</strong> es la referencia legal, no el horario definitivo.</p>
+
+<h3>4. Cursos — «¿Qué grupos hay en el centro?»</h3>
+<p>1.º A, 2.º B, 3.º C… Cada curso se asigna a un subciclo. Son los grupos a los que se pueden asignar clases.</p>
+
+<h3>5. Asignaturas y horas por curso — «¿Cuántas horas reales tendrá cada grupo?»</h3>
+<p>Lista de asignaturas + matriz de horas por curso. Si 4.º A tiene 4 h de Lengua, el generador intentará programar cuatro clases de Lengua esa semana.</p>
+<div class="important">El total de horas de un curso no puede superar los huecos de la malla horaria.</div>
+
+<h3>6. Profesores — «¿Quién puede dar qué y cuándo NO puede?»</h3>
+<table>
+  <tr><th>Dato</th><th>Significado práctico</th></tr>
+  <tr><td>Nombre</td><td>Cómo aparece en el horario</td></tr>
+  <tr><td>Asignaturas</td><td>Qué puede impartir</td></tr>
+  <tr><td>Ámbito</td><td>Todo el centro, solo un ciclo o cursos concretos</td></tr>
+  <tr><td>Horas máximas / semana</td><td>Tope de horas lectivas semanales</td></tr>
+  <tr><td>Disponibilidad</td><td>Franjas en las que NO puede dar clase</td></tr>
+</table>
+<p><strong>Esta es la parte que más afecta a cada docente.</strong> Ficha incompleta → clases mal colocadas o sin colocar.</p>
+
+<h3>7. Generar horario</h3>
+<p>El programa comprueba datos, calcula sesiones e intenta ubicarlas respetando asignaturas, ámbito, indisponibilidad, horas máximas y solapes. Si no puede colocar todo, el horario queda incompleto con indicación de causas. Después: ajustes manuales y exportación a Excel.</p>
+
+<h2>De «horas» a «clases en el horario»</h2>
+<p>3 h de Lengua con clases de 45 min → 3 sesiones. Con clases de 60 min → 3 sesiones de 60 minutos. El día se divide en bloques pequeños (p. ej. 15 min): 45 min = 3 bloques seguidos; 60 min = 4 bloques.</p>
+
+<div class="page-break"></div>
+
+<h2>Checklist por profesor</h2>
+<ul>
+  <li>Nombre correcto en el sistema</li>
+  <li>Todas las asignaturas que imparte, marcadas</li>
+  <li>Ámbito correcto (ciclo / cursos)</li>
+  <li>Horas máximas realistas</li>
+  <li>Disponibilidad actualizada tras cambios de malla</li>
+  <li>Horas definidas en la matriz para sus cursos</li>
+  <li>Compañeros que comparten asignatura, dados de alta correctamente</li>
+</ul>
+
+<h2>Problemas frecuentes</h2>
+<table>
+  <tr><th>Lo que se nota</th><th>Causa habitual</th></tr>
+  <tr><td>Clase en horario de reunión o reducción</td><td>Indisponibilidad no marcada</td></tr>
+  <tr><td>Falta una hora de una asignatura</td><td>Sin profesor habilitado o sin hueco</td></tr>
+  <tr><td>Nombres genéricos («Prof. Mates»)</td><td>Plantilla sin personalizar</td></tr>
+  <tr><td>Tras cambiar la malla, horarios raros</td><td>Se resetea la disponibilidad</td></tr>
+  <tr><td>Demasiadas horas</td><td>Horas máximas mal puestas o pocos profesores</td></tr>
+</table>
+
+<h2>Lo que el sistema NO hace</h2>
+<ul>
+  <li>No decide criterios pedagógicos (p. ej. Mates por la mañana)</li>
+  <li>No reparte automáticamente entre dos profesores de la misma asignatura</li>
+  <li>No gestiona sustituciones, guardias ni aulas</li>
+  <li>No envía el horario individual por correo</li>
+</ul>
+
+<h2>Resumen del proceso</h2>
+<div class="flow">Malla horaria (jornada del cole)
+        ↓
+Cursos + horas por asignatura
+        ↓
+Profesores + restricciones
+        ↓
+GENERAR → Cuadrante semanal
+        ↓
+Ajustes + Excel → Horario definitivo</div>
+
+<h2>Formulario — Datos para el centro</h2>
+<p><strong>Nombre y apellidos:</strong> _______________________________________________</p>
+<p><strong>Asignaturas que imparte:</strong> _______________________________________________</p>
+<p><strong>Cursos / grupos:</strong> _______________________________________________</p>
+<p><strong>Horas máximas semanales:</strong> _______________________________________________</p>
+
+<table class="form-table">
+  <tr><th>Día</th><th>Franjas NO disponibles</th></tr>
+  <tr><td>Lunes</td><td></td></tr>
+  <tr><td>Martes</td><td></td></tr>
+  <tr><td>Miércoles</td><td></td></tr>
+  <tr><td>Jueves</td><td></td></tr>
+  <tr><td>Viernes</td><td></td></tr>
+</table>
+
+<p><strong>Observaciones:</strong> _______________________________________________</p>
+
+<p class="footer">HorarioSL — Colegio San Lorenzo · Guía para el profesorado</p>
+
+</body>
+</html>

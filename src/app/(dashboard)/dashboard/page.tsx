@@ -7,6 +7,8 @@ import { getRelationName } from "@/lib/supabase/helpers";
 import { localDb } from "@/lib/local-db/store";
 import { BookOpen, Calendar, GraduationCap, Users } from "lucide-react";
 import { SetupProgress } from "@/components/layout/setup-progress";
+import { buildProgressSteps } from "@/lib/onboarding/steps";
+import { useSetupStatus } from "@/hooks/use-setup-status";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,6 +32,7 @@ export default function DashboardPage() {
   });
 
   const [loading, setLoading] = useState(true);
+  const { status: setupStatus } = useSetupStatus();
 
   useEffect(() => {
     async function load() {
@@ -139,43 +142,7 @@ export default function DashboardPage() {
     load();
   }, []);
 
-  const setupSteps = [
-    {
-      id: "malla",
-      label: "Malla horaria configurada",
-      description: "Días, horarios y recreos",
-      done: stats.setup.hasTimetable,
-      href: "/dashboard/configuracion/malla",
-    },
-    {
-      id: "cursos",
-      label: "Cursos añadidos",
-      description: "Grupos del centro",
-      done: stats.courses > 0,
-      href: "/dashboard/cursos",
-    },
-    {
-      id: "horas",
-      label: "Horas por curso definidas",
-      description: "Asignaturas y horas por curso",
-      done: stats.setup.hasHours,
-      href: "/dashboard/asignaturas",
-    },
-    {
-      id: "profesores",
-      label: "Profesores añadidos",
-      description: "Profesores y restricciones",
-      done: stats.setup.hasTeachers,
-      href: "/dashboard/profesores",
-    },
-    {
-      id: "horario",
-      label: "Horario generado",
-      description: "Generar horario",
-      done: stats.setup.hasSchedule,
-      href: "/dashboard/horarios",
-    },
-  ];
+  const setupSteps = buildProgressSteps(setupStatus);
 
   if (loading) return <PageLoadingSkeleton />;
 

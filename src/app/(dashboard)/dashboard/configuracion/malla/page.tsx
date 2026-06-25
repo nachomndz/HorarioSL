@@ -16,7 +16,9 @@ import { WeeklyGridPreview } from "@/components/timetable/weekly-grid-preview";
 import { PageHeader } from "@/components/layout/page-header";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
 import { ConfigGuide } from "@/components/layout/config-guide";
+import { NextStepBanner } from "@/components/layout/next-step-banner";
 import { Hint } from "@/components/ui/hint";
+import { SectionHint } from "@/components/ui/section-hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,6 +37,7 @@ export default function TimetableConfigPage() {
     day_start: "09:00",
     day_end: "16:00",
     session_duration_minutes: 45,
+    block_granularity_minutes: 15,
     recesses: [{ start: "11:30", duration_minutes: 30 }] as RecessConfig[],
   });
 
@@ -61,6 +64,7 @@ export default function TimetableConfigPage() {
             day_start: s.day_start.slice(0, 5),
             day_end: s.day_end.slice(0, 5),
             session_duration_minutes: s.session_duration_minutes,
+            block_granularity_minutes: s.block_granularity_minutes ?? 15,
             recesses: s.recesses as RecessConfig[],
           });
         }
@@ -146,16 +150,23 @@ export default function TimetableConfigPage() {
       >
         {isAdmin && (
           <Hint label="Regenera las franjas horarias; revisa después la disponibilidad de profesores">
-            <Button onClick={handleSave} disabled={saving}>
+            <Button data-tour="malla-save" onClick={handleSave} disabled={saving}>
               {saving ? "Guardando..." : "Guardar malla"}
             </Button>
           </Hint>
         )}
       </PageHeader>
 
+      <Card className="border-amber-200 bg-amber-50/50">
+        <CardContent className="pt-4 text-sm text-amber-900">
+          Al guardar la malla se regeneran las franjas horarias y se resetea la disponibilidad de
+          todos los profesores. Revisa sus restricciones después de cada cambio.
+        </CardContent>
+      </Card>
+
       <div className="flex flex-wrap gap-2">
         <Badge variant="secondary">{settings.school_days.length} días lectivos</Badge>
-        <Badge variant="secondary">{sessionCount} sesiones/semana</Badge>
+        <Badge variant="secondary">{sessionCount} bloques/semana</Badge>
         <Badge variant="secondary">{settings.recesses.length} recreo(s)</Badge>
       </div>
 
@@ -165,11 +176,7 @@ export default function TimetableConfigPage() {
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
                 1. Días lectivos
-                <Hint label="Marca los días en los que hay clase">
-                  <button type="button" className="text-muted-foreground hover:text-foreground">
-                    <HelpCircle className="h-4 w-4" />
-                  </button>
-                </Hint>
+                <SectionHint label="Marca los días en los que hay clase" />
               </CardTitle>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-4">
@@ -190,11 +197,7 @@ export default function TimetableConfigPage() {
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
                 2. Jornada escolar
-                <Hint label="Hora de entrada, salida y duración de cada sesión lectiva">
-                  <button type="button" className="text-muted-foreground hover:text-foreground">
-                    <HelpCircle className="h-4 w-4" />
-                  </button>
-                </Hint>
+                <SectionHint label="Hora de entrada, salida y duración de cada sesión lectiva" />
               </CardTitle>
             </CardHeader>
             <CardContent className="grid gap-4 sm:grid-cols-3">
@@ -217,7 +220,24 @@ export default function TimetableConfigPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Sesión (min)</Label>
+                <Label>Granularidad bloque (min)</Label>
+                <Input
+                  type="number"
+                  min={15}
+                  max={60}
+                  step={15}
+                  value={settings.block_granularity_minutes}
+                  onChange={(e) =>
+                    setSettings((p) => ({
+                      ...p,
+                      block_granularity_minutes: Number(e.target.value),
+                    }))
+                  }
+                  disabled={!isAdmin}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Sesión ref. (min)</Label>
                 <Input
                   type="number"
                   min={30}
@@ -302,6 +322,8 @@ export default function TimetableConfigPage() {
           </CardContent>
         </Card>
       </div>
+
+      <NextStepBanner />
     </div>
   );
 }

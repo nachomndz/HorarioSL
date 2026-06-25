@@ -19,8 +19,10 @@ import { CYCLE_LABELS, CYCLE_ORDER } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
 import { ConfigGuide } from "@/components/layout/config-guide";
+import { NextStepBanner } from "@/components/layout/next-step-banner";
 import { ConfirmDialog } from "@/components/layout/confirm-dialog";
 import { EmptyState } from "@/components/layout/empty-state";
+import { SectionHint } from "@/components/ui/section-hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -101,7 +103,14 @@ export default function SubjectsPage() {
       }
       return [
         ...prev,
-        { id: `temp-${courseId}-${subjectId}`, course_id: courseId, subject_id: subjectId, weekly_hours: value },
+        {
+          id: `temp-${courseId}-${subjectId}`,
+          course_id: courseId,
+          subject_id: subjectId,
+          weekly_hours: value,
+          weekly_minutes: value * 45,
+          session_duration_minutes: 45,
+        },
       ];
     });
   }
@@ -180,8 +189,20 @@ export default function SubjectsPage() {
 
       <Tabs defaultValue="subjects">
         <TabsList>
-          <TabsTrigger value="subjects">Asignaturas</TabsTrigger>
-          <TabsTrigger value="matrix">Horas por curso</TabsTrigger>
+          <TabsTrigger value="subjects">
+            Asignaturas
+            <SectionHint
+              className="ml-1"
+              label="Lista de asignaturas del centro. Añade o edita nombres y colores."
+            />
+          </TabsTrigger>
+          <TabsTrigger value="matrix">
+            Horas por curso
+            <SectionHint
+              className="ml-1"
+              label="Matriz de horas reales por curso. Compara con las horas obligatorias del currículo."
+            />
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="subjects" className="space-y-4">
@@ -325,6 +346,16 @@ export default function SubjectsPage() {
         </TabsContent>
 
         <TabsContent value="matrix" className="space-y-4">
+          {courses.length === 0 ? (
+            <EmptyState
+              icon={BookOpen}
+              title="Sin cursos"
+              description="Necesitas cursos para definir la matriz de horas por asignatura."
+              actionHref="/dashboard/cursos"
+              actionLabel="Ir a Cursos"
+            />
+          ) : (
+          <>
           <div className="flex flex-wrap items-center gap-3">
             <Label>Filtrar por etapa:</Label>
             <Select
@@ -351,7 +382,7 @@ export default function SubjectsPage() {
             {isAdmin && <Button onClick={saveHours}>Guardar matriz</Button>}
           </div>
 
-          <div className="overflow-x-auto rounded-lg border">
+          <div className="overflow-x-auto rounded-lg border" data-tour="asignaturas-matrix">
             <table className="w-full min-w-[720px] border-collapse text-sm">
               <thead>
                 <tr>
@@ -401,6 +432,8 @@ export default function SubjectsPage() {
               </tbody>
             </table>
           </div>
+          </>
+          )}
         </TabsContent>
       </Tabs>
 
@@ -428,6 +461,8 @@ export default function SubjectsPage() {
           toast.success("Asignatura eliminada");
         }}
       />
+
+      <NextStepBanner />
     </div>
   );
 }

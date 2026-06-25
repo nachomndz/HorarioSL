@@ -24,11 +24,13 @@ export async function fetchSolverInput(schoolId: string): Promise<SolverInput | 
     { data: subjects },
     { data: teachers },
     { data: timeSlots },
+    { data: settings },
   ] = await Promise.all([
     supabase.from("courses").select("*").eq("school_id", schoolId),
     supabase.from("subjects").select("*").eq("school_id", schoolId),
     supabase.from("teachers").select("*").eq("school_id", schoolId),
     supabase.from("time_slots").select("*").eq("school_id", schoolId),
+    supabase.from("timetable_settings").select("block_granularity_minutes, session_duration_minutes").eq("school_id", schoolId).maybeSingle(),
   ]);
 
   if (!courses?.length || !subjects?.length || !teachers?.length || !timeSlots?.length) {
@@ -64,6 +66,11 @@ export async function fetchSolverInput(schoolId: string): Promise<SolverInput | 
     teacherCourses: (teacherCourses as TeacherCourse[]) ?? [],
     teacherUnavailability: (teacherUnavailability as TeacherUnavailability[]) ?? [],
     courseSubjectHours: courseSubjectHours as CourseSubjectHours[],
-    timeSlots: timeSlots as TimeSlot[],
+    timeSlots: (timeSlots as TimeSlot[]).map((s) => ({
+      ...s,
+      duration_minutes: s.duration_minutes ?? 15,
+    })),
+    blockGranularityMinutes:
+      settings?.block_granularity_minutes ?? settings?.session_duration_minutes ?? 15,
   };
 }
