@@ -29,9 +29,12 @@ import { NextStepBanner } from "@/components/layout/next-step-banner";
 import { EmptyState } from "@/components/layout/empty-state";
 import { SectionHint } from "@/components/ui/section-hint";
 import { LoadAnexoDialog } from "@/components/curriculum/load-anexo-dialog";
+import {
+  buildPrimariaTableRows,
+  CurriculumMatrixTable,
+} from "@/components/curriculum/curriculum-matrix-table";
 import { Table, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -42,38 +45,6 @@ import {
 } from "@/components/ui/select";
 
 type CellKey = `${string}:${string}`;
-
-type TableRow =
-  | { type: "header"; label: string }
-  | { type: "subject"; subject: Subject };
-
-function buildPrimariaRows(subjects: Subject[]): TableRow[] {
-  const byName = new Map(subjects.map((s) => [s.name, s]));
-  const used = new Set<string>();
-  const rows: TableRow[] = [];
-  let lastElectiveGroup: string | undefined;
-
-  for (const template of PRIMARIA_ANEXO_IV) {
-    const subject = byName.get(template.subjectName);
-    if (!subject) continue;
-    used.add(subject.id);
-
-    if (template.electiveGroup && template.electiveGroup !== lastElectiveGroup) {
-      rows.push({ type: "header", label: "Elegir una" });
-      lastElectiveGroup = template.electiveGroup;
-    }
-    rows.push({ type: "subject", subject });
-  }
-
-  const extras = subjects
-    .filter((s) => !used.has(s.id))
-    .sort((a, b) => a.name.localeCompare(b.name, "es"));
-  for (const subject of extras) {
-    rows.push({ type: "subject", subject });
-  }
-
-  return rows;
-}
 
 function electiveGroupIdForSubject(subject: Subject): string | null {
   const template = PRIMARIA_ANEXO_IV.find((t) => t.subjectName === subject.name);
@@ -173,7 +144,10 @@ export default function CurriculumPage() {
   }
 
   const tableRows = useMemo(
-    () => (cycle === "primaria" ? buildPrimariaRows(subjects) : subjects.map((s) => ({ type: "subject" as const, subject: s }))),
+    () =>
+      cycle === "primaria"
+        ? buildPrimariaTableRows(subjects)
+        : subjects.map((s) => ({ type: "subject" as const, subject: s })),
     [cycle, subjects]
   );
 
@@ -343,123 +317,17 @@ export default function CurriculumPage() {
           actionLabel="Ir a Subciclos"
         />
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full min-w-[900px] border-collapse text-sm">
-            <thead>
-              <tr>
-                <th className="sticky left-0 z-10 border-b bg-slate-800 px-3 py-2 text-left text-white">
-                  Asignatura
-                </th>
-                {stages.map((stage) => (
-                  <th key={stage.id} className="border-b bg-slate-100 px-2 py-2 text-center text-xs">
-                    <div className="font-semibold">{stage.name}</div>
-                    <div className="text-muted-foreground">h / duración</div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {tableRows.map((row, i) => {
-                if (row.type === "header") {
-                  return (
-                    <tr key={`header-${i}`} className="bg-amber-50/80">
-                      <td
-                        colSpan={stages.length + 1}
-                        className="border-b px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-amber-900"
-                      >
-                        {row.label}
-                      </td>
-                    </tr>
-                  );
-                }
-
-                const { subject } = row;
-                return (
-                  <tr key={subject.id} className="hover:bg-muted/50">
-                    <td className="sticky left-0 z-10 border-b bg-card px-3 py-2 font-medium">
-                      {subject.short_name || subject.name}
-                    </td>
-                    {stages.map((stage) => {
-                      const cell = getCell(stage.id, subject.id);
-                      return (
-                        <td key={stage.id} className="border-b p-1">
-                          <div className="flex items-center justify-center gap-1">
-                            <Input
-                              type="number"
-                              step="0.5"
-                              min={0}
-                              className="h-8 w-14 text-center"
-                              value={cell.hours}
-                              onChange={(e) =>
-                                setCell(stage.id, subject.id, "hours", e.target.value)
-                              }
-                              disabled={!isAdmin}
-                              placeholder="0"
-                            />
-                            <Input
-                              type="number"
-                              min={15}
-                              step={15}
-                              className="h-8 w-14 text-center"
-                              value={cell.duration}
-                              onChange={(e) =>
-                                setCell(stage.id, subject.id, "duration", e.target.value)
-                              }
-                              disabled={!isAdmin}
-                              title="Duración clase (min)"
-                            />
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-              <tr className="bg-muted/40 font-semibold">
-                <td className="sticky left-0 border-b bg-muted/40 px-3 py-2">Total horas lectivas</td>
-                {stages.map((stage) => {
-                  const total = totalsByStage[stage.id] ?? 0;
-                  const ok = targetHours == null || Math.abs(total - targetHours) < 0.01;
-                  return (
-                    <td
-                      key={stage.id}
-                      className={`border-b px-2 py-2 text-center ${targetHours != null ? (ok ? "text-green-700" : "text-amber-700") : ""}`}
-                    >
-                      {total}h
-                      {targetHours != null && (
-                        <span className="block text-[10px] font-normal text-muted-foreground">
-                          obj. {targetHours}h
-                        </span>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-              {recessHours != null && (
-                <>
-                  <tr className="bg-muted/20 text-muted-foreground">
-                    <td className="sticky left-0 border-b bg-muted/20 px-3 py-2">Recreo (referencia)</td>
-                    {stages.map((stage) => (
-                      <td key={stage.id} className="border-b px-2 py-2 text-center">
-                        {recessHours}h
-                      </td>
-                    ))}
-                  </tr>
-                  <tr className="bg-muted/30 font-medium">
-                    <td className="sticky left-0 border-b bg-muted/30 px-3 py-2">
-                      Total jornada (referencia)
-                    </td>
-                    {stages.map((stage) => (
-                      <td key={stage.id} className="border-b px-2 py-2 text-center">
-                        {(totalsByStage[stage.id] ?? 0) + recessHours}h
-                      </td>
-                    ))}
-                  </tr>
-                </>
-              )}
-            </tbody>
-          </table>
-        </div>
+        <CurriculumMatrixTable
+          stages={stages}
+          rows={tableRows}
+          getCell={getCell}
+          onCellChange={setCell}
+          totalsByStage={totalsByStage}
+          targetHours={targetHours}
+          recessHours={recessHours}
+          isAdmin={isAdmin}
+          showPrimariaHints={cycle === "primaria"}
+        />
       )}
 
       {isAdmin && stages.length > 0 && subjectsNotInTable.length > 0 && (

@@ -21,7 +21,7 @@ import {
   inferStageIndexForCourse,
   type PrimariaElectiveChoices,
 } from "@/lib/curriculum/templates";
-import { generateTimeSlots, countSessionSlots } from "@/lib/timetable";
+import { generateTimeSlots, countSessionSlots, DEFAULT_TIMETABLE_SETTINGS } from "@/lib/timetable";
 import { DEFAULT_COURSES_TEMPLATE } from "@/lib/utils";
 
 export type TimetableSettingsInput = {
@@ -248,6 +248,66 @@ export async function saveTimetableSettings(
   }
 
   return { slotCount: countSessionSlots(generated) };
+}
+
+export async function fetchTimeSlots(schoolId: string): Promise<TimeSlot[]> {
+  const supabase = await getClient();
+  const { data, error } = await supabase
+    .from("time_slots")
+    .select("*")
+    .eq("school_id", schoolId)
+    .order("sort_order");
+  if (error) throw new Error(error.message);
+  return (data as TimeSlot[]) ?? [];
+}
+
+/** Creates time_slots from timetable_settings when none exist (does not reset unavailability). */
+export async function ensureTimeSlotsFromSettings(
+  schoolId: string
+): Promise<{ slots: TimeSlot[]; created: boolean; error?: string }> {
+  const supabase = await getClient();
+  const { count } = await supabase
+    .from("time_slots")
+    .select("*", { count: "exact", head: true })
+    .eq("school_id", schoolId);
+
+  if ((count ?? 0) > 0) {
+    return { slots: await fetchTimeSlots(schoolId), created: false };
+  }
+
+  let settings = await fetchTimetableSettings(schoolId);
+  if (!settings) {
+    const defaults = DEFAULT_TIMETABLE_SETTINGS;
+    const { error: insertError } = await supabase.from("timetable_settings").insert({
+      school_id: schoolId,
+      school_days: defaults.school_days,
+      day_start: normalizeTime(defaults.day_start),
+      day_end: normalizeTime(defaults.day_end),
+      session_duration_minutes: defaults.session_duration_minutes,
+      block_granularity_minutes: defaults.block_granularity_minutes,
+      recesses: defaults.recesses,
+    });
+    if (insertError) return { slots: [], created: false, error: insertError.message };
+    settings = defaults;
+  }
+
+  const generated = generateTimeSlots(schoolId, settings);
+  if (generated.length > 0) {
+    const { error: slotsError } = await supabase.from("time_slots").insert(
+      generated.map((s) => ({
+        school_id: s.school_id,
+        day_of_week: s.day_of_week,
+        start_time: s.start_time,
+        end_time: s.end_time,
+        slot_type: s.slot_type,
+        sort_order: s.sort_order,
+        duration_minutes: s.duration_minutes,
+      }))
+    );
+    if (slotsError) return { slots: [], created: false, error: slotsError.message };
+  }
+
+  return { slots: await fetchTimeSlots(schoolId), created: true };
 }
 
 export async function fetchSubjectsData(schoolId: string) {

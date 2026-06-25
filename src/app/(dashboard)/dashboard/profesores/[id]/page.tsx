@@ -5,6 +5,11 @@ import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { isLocalMode } from "@/lib/data/mode";
 import { localDb } from "@/lib/local-db/store";
+import {
+  ensureTimeSlotsFromSettings,
+  fetchTimeSlots,
+} from "@/lib/data/school-repository";
+import { remapBlockedSlotIds } from "@/lib/timetable";
 import type {
   Course,
   Subject,
@@ -49,6 +54,7 @@ export default function TeacherEditPage() {
   const [blockedSlots, setBlockedSlots] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [schoolId, setSchoolId] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -58,7 +64,9 @@ export default function TeacherEditPage() {
     if (isLocalMode()) {
       const ctx = localDb.getSchoolContext();
       if (!ctx) return;
+      setSchoolId(ctx.schoolId);
       setIsAdmin(ctx.isAdmin);
+      localDb.ensureTimeSlotsFromSettings(ctx.schoolId);
       const schoolData = localDb.getSchoolData(ctx.schoolId);
       const teacherData = localDb.getTeacher(teacherId);
       if (!teacherData) {
@@ -89,13 +97,20 @@ export default function TeacherEditPage() {
       .eq("user_id", user.id)
       .single();
     if (!member) return;
+    setSchoolId(member.school_id);
     setIsAdmin(member.role === "admin");
+
+    const slotResult = await ensureTimeSlotsFromSettings(member.school_id);
+    if (slotResult.error) {
+      toast.error(slotResult.error);
+      setLoading(false);
+      return;
+    }
 
     const [
       { data: teacherData },
       { data: subjectsData },
       { data: coursesData },
-      { data: slotsData },
       { data: teacherSubjects },
       { data: teacherCourses },
       { data: unavailability },
@@ -103,11 +118,14 @@ export default function TeacherEditPage() {
       supabase.from("teachers").select("*").eq("id", teacherId).single(),
       supabase.from("subjects").select("*").eq("school_id", member.school_id),
       supabase.from("courses").select("*").eq("school_id", member.school_id).order("sort_order"),
-      supabase.from("time_slots").select("*").eq("school_id", member.school_id),
       supabase.from("teacher_subjects").select("*").eq("teacher_id", teacherId),
       supabase.from("teacher_courses").select("*").eq("teacher_id", teacherId),
       supabase.from("teacher_unavailability").select("*").eq("teacher_id", teacherId),
     ]);
+
+    const slotsData = slotResult.slots.length
+      ? slotResult.slots
+      : await fetchTimeSlots(member.school_id);
 
     if (!teacherData) {
       router.push("/dashboard/profesores");
@@ -117,7 +135,7 @@ export default function TeacherEditPage() {
     setTeacher(teacherData as Teacher);
     setSubjects((subjectsData as Subject[]) ?? []);
     setCourses((coursesData as Course[]) ?? []);
-    setTimeSlots((slotsData as TimeSlot[]) ?? []);
+    setTimeSlots(slotsData);
     setSelectedSubjects(
       new Set((teacherSubjects as TeacherSubject[])?.map((ts) => ts.subject_id) ?? [])
     );
@@ -175,16 +193,31 @@ export default function TeacherEditPage() {
       scope_cycle: teacher.scope_cycle,
       subjectIds: Array.from(selectedSubjects),
       courseIds: Array.from(selectedCourses),
-      blockedSlotIds: Array.from(blockedSlots),
+      blockedSlotIds: [] as string[],
     };
 
     if (isLocalMode()) {
+      if (schoolId) localDb.ensureTimeSlotsFromSettings(schoolId);
+      const freshSlots = schoolId ? localDb.getSchoolData(schoolId).timeSlots : timeSlots;
+      payload.blockedSlotIds = remapBlockedSlotIds(blockedSlots, freshSlots);
       localDb.saveTeacher(teacher.id, payload);
+      setTimeSlots(freshSlots);
       setTeacher({ ...teacher, name });
       setSaving(false);
       toast.success("Profesor guardado");
       return;
     }
+
+    if (!schoolId) {
+      setSaving(false);
+      return;
+    }
+
+    const slotResult = await ensureTimeSlotsFromSettings(schoolId);
+    const freshSlots =
+      slotResult.slots.length > 0 ? slotResult.slots : await fetchTimeSlots(schoolId);
+    payload.blockedSlotIds = remapBlockedSlotIds(blockedSlots, freshSlots);
+    setTimeSlots(freshSlots);
 
     const { createClient } = await import("@/lib/supabase/client");
     const supabase = createClient();
@@ -227,9 +260,9 @@ export default function TeacherEditPage() {
     }
 
     await supabase.from("teacher_unavailability").delete().eq("teacher_id", teacher.id);
-    if (blockedSlots.size > 0) {
+    if (payload.blockedSlotIds.length > 0) {
       await supabase.from("teacher_unavailability").insert(
-        Array.from(blockedSlots).map((time_slot_id) => ({
+        payload.blockedSlotIds.map((time_slot_id) => ({
           teacher_id: teacher.id,
           time_slot_id,
         }))
@@ -413,25 +446,19 @@ export default function TeacherEditPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             Disponibilidad
-            <SectionHint label="Marca las franjas en las que el profesor NO puede dar clase. Se actualiza al guardar la malla horaria." />
+            <SectionHint label="Marca las franjas en las que el profesor NO puede dar clase." />
           </CardTitle>
           <CardDescription>
             Marca las franjas en las que el profesor NO está disponible.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {timeSlots.length === 0 ? (
-            <p className="text-muted-foreground">
-              Primero configura la malla horaria en Configuración.
-            </p>
-          ) : (
-            <AvailabilityGrid
-              timeSlots={timeSlots}
-              blockedSlotIds={blockedSlots}
-              onToggle={toggleBlocked}
-              readOnly={!isAdmin}
-            />
-          )}
+          <AvailabilityGrid
+            timeSlots={timeSlots}
+            blockedSlotIds={blockedSlots}
+            onToggle={toggleBlocked}
+            readOnly={!isAdmin}
+          />
         </CardContent>
       </Card>
         </TabsContent>

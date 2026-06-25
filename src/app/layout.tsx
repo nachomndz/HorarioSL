@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Cormorant_Garamond, Geist, Geist_Mono } from "next/font/google";
+import { Cormorant_Garamond, Geist, Geist_Mono, Hanken_Grotesk } from "next/font/google";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -19,6 +19,12 @@ const cormorant = Cormorant_Garamond({
   weight: ["400", "500", "600", "700"],
 });
 
+const hankenGrotesk = Hanken_Grotesk({
+  variable: "--font-landing",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+});
+
 export const metadata: Metadata = {
   title: "HorarioSL — Generador de horarios escolares",
   description:
@@ -33,7 +39,7 @@ export default function RootLayout({
   return (
     <html
       lang="es"
-      className={`${geistSans.variable} ${geistMono.variable} ${cormorant.variable} h-full`}
+      className={`${geistSans.variable} ${geistMono.variable} ${cormorant.variable} ${hankenGrotesk.variable} h-full`}
     >
       <body className="min-h-full antialiased">
         {children}

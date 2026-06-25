@@ -12,7 +12,7 @@ import {
 import { generateTimeSlots, countSessionSlots } from "@/lib/timetable";
 import { useSchoolContext } from "@/hooks/use-school-context";
 import type { RecessConfig } from "@/types";
-import { WeeklyGridPreview } from "@/components/timetable/weekly-grid-preview";
+import { WeeklyGridTable } from "@/components/timetable/weekly-grid-table";
 import { PageHeader } from "@/components/layout/page-header";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
 import { ConfigGuide } from "@/components/layout/config-guide";
@@ -220,7 +220,10 @@ export default function TimetableConfigPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Granularidad bloque (min)</Label>
+                <Label className="flex items-center gap-2">
+                  Granularidad bloque (min)
+                  <SectionHint label="Tamaño mínimo de cada franja horaria. Suele ser 15 min." />
+                </Label>
                 <Input
                   type="number"
                   min={15}
@@ -237,7 +240,10 @@ export default function TimetableConfigPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Sesión ref. (min)</Label>
+                <Label className="flex items-center gap-2">
+                  Sesión ref. (min)
+                  <SectionHint label="Duración de referencia de una clase completa. No tiene que coincidir con cada bloque." />
+                </Label>
                 <Input
                   type="number"
                   min={30}
@@ -314,11 +320,12 @@ export default function TimetableConfigPage() {
           <CardHeader>
             <CardTitle className="text-base">Vista previa semanal</CardTitle>
             <CardDescription>
-              Así se verán las franjas en los horarios de profesores y cursos.
+              Simulación de la rejilla semanal. Al pulsar «Guardar malla» se aplican estos horarios
+              al colegio y se regeneran las franjas de disponibilidad de profesores.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <WeeklyGridPreview slots={computedPreview} />
+            <WeeklyGridTable slots={computedPreview} />
           </CardContent>
         </Card>
       </div>

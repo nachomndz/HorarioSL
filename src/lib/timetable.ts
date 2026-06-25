@@ -22,6 +22,35 @@ export type TimetableGenerationSettings = Pick<
   "school_days" | "day_start" | "day_end" | "session_duration_minutes" | "block_granularity_minutes" | "recesses"
 >;
 
+export const DEFAULT_TIMETABLE_SETTINGS: TimetableGenerationSettings = {
+  school_days: [1, 2, 3, 4, 5],
+  day_start: "09:00",
+  day_end: "16:00",
+  session_duration_minutes: 45,
+  block_granularity_minutes: 15,
+  recesses: [{ start: "11:30", duration_minutes: 30 }],
+};
+
+export function slotKey(slot: Pick<TimeSlot, "day_of_week" | "start_time">): string {
+  return `${slot.day_of_week}:${slot.start_time.slice(0, 5)}`;
+}
+
+export function remapBlockedSlotIds(
+  blockedIds: Iterable<string>,
+  slots: TimeSlot[]
+): string[] {
+  const byId = new Map(slots.map((s) => [s.id, s]));
+  const byKey = new Map(slots.map((s) => [slotKey(s), s.id]));
+  const result: string[] = [];
+  for (const id of blockedIds) {
+    const slot = byId.get(id);
+    const key = slot ? slotKey(slot) : null;
+    const mapped = key ? byKey.get(key) : id;
+    if (mapped) result.push(mapped);
+  }
+  return result;
+}
+
 export function getBlockGranularity(settings: TimetableGenerationSettings): number {
   return settings.block_granularity_minutes || settings.session_duration_minutes || 15;
 }

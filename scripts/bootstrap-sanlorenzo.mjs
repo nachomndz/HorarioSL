@@ -6,6 +6,7 @@
 import { readFileSync } from "fs";
 import { createClient } from "@supabase/supabase-js";
 import { seedPrimariaAnexo } from "./lib/seed-primaria-anexo.mjs";
+import { ensureTimeSlots } from "./lib/ensure-time-slots.mjs";
 
 const EMAIL = "sanlorenzo@horariosl.app";
 const PASSWORD = "12456@SL";
@@ -116,6 +117,18 @@ async function main() {
     console.log("Datos iniciales sembrados (cursos, malla...)");
   } else {
     console.log("El colegio ya tiene cursos, seed_school_defaults omitido");
+  }
+
+  try {
+    const slots = await ensureTimeSlots(admin, schoolId);
+    if (slots.created) {
+      console.log(`Franjas horarias iniciales creadas (${slots.count} bloques)`);
+    } else {
+      console.log("Franjas horarias ya existían");
+    }
+  } catch (e) {
+    console.error("Error en ensure time_slots:", e.message);
+    process.exit(1);
   }
 
   try {

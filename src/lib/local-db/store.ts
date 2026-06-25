@@ -1,4 +1,4 @@
-import type { Cycle, RecessConfig, Schedule } from "@/types";
+import type { Cycle, RecessConfig, Schedule, TimeSlot } from "@/types";
 import { courseHoursFromRequirement } from "@/lib/curriculum";
 import {
   buildPrimariaAnexoSeed,
@@ -18,7 +18,7 @@ import {
   isSanLorenzoUsername,
 } from "@/lib/auth/credentials";
 import { hashPassword, isPasswordHash, verifyPassword } from "@/lib/auth/password";
-import { generateTimeSlots } from "@/lib/timetable";
+import { generateTimeSlots, DEFAULT_TIMETABLE_SETTINGS } from "@/lib/timetable";
 import { DEFAULT_COURSES_TEMPLATE } from "@/lib/utils";
 import { DB_KEY, SESSION_KEY, newId, nowIso } from "./utils";
 import type { LocalDatabase, LocalSession } from "./types";
@@ -59,6 +59,45 @@ function writeSession(session: LocalSession | null) {
   }
 }
 
+function ensureTimeSlotsFromSettingsLocal(
+  db: LocalDatabase,
+  schoolId: string
+): { slots: TimeSlot[]; created: boolean } {
+  const existing = db.timeSlots.filter((t) => t.school_id === schoolId);
+  if (existing.length > 0) {
+    return { slots: existing, created: false };
+  }
+
+  let settings = db.timetableSettings.find((t) => t.school_id === schoolId);
+  if (!settings) {
+    settings = {
+      id: newId(),
+      school_id: schoolId,
+      school_days: DEFAULT_TIMETABLE_SETTINGS.school_days,
+      day_start: "09:00:00",
+      day_end: "16:00:00",
+      session_duration_minutes: DEFAULT_TIMETABLE_SETTINGS.session_duration_minutes,
+      block_granularity_minutes: DEFAULT_TIMETABLE_SETTINGS.block_granularity_minutes,
+      recesses: DEFAULT_TIMETABLE_SETTINGS.recesses,
+      updated_at: nowIso(),
+    };
+    db.timetableSettings.push(settings);
+  }
+
+  const generated = generateTimeSlots(schoolId, {
+    school_days: settings.school_days,
+    day_start: settings.day_start.slice(0, 5),
+    day_end: settings.day_end.slice(0, 5),
+    session_duration_minutes: settings.session_duration_minutes,
+    block_granularity_minutes: settings.block_granularity_minutes ?? 15,
+    recesses: settings.recesses as RecessConfig[],
+  });
+  for (const slot of generated) {
+    db.timeSlots.push({ id: newId(), ...slot });
+  }
+  return { slots: db.timeSlots.filter((t) => t.school_id === schoolId), created: true };
+}
+
 function generateSlotsForSchool(db: LocalDatabase, schoolId: string) {
   const settings = db.timetableSettings.find((t) => t.school_id === schoolId);
   if (!settings) return;
@@ -75,7 +114,6 @@ function generateSlotsForSchool(db: LocalDatabase, schoolId: string) {
     db.timeSlots.push({ id: newId(), ...slot });
   }
 }
-
 
 async function migrateUserPasswords(db: LocalDatabase): Promise<void> {
   let changed = false;
@@ -774,6 +812,13 @@ export const localDb = {
     }
     writeDb(db);
     return {};
+  },
+
+  ensureTimeSlotsFromSettings(schoolId: string) {
+    const db = readDb();
+    const result = ensureTimeSlotsFromSettingsLocal(db, schoolId);
+    writeDb(db);
+    return result;
   },
 
   saveTimetableSettings(
