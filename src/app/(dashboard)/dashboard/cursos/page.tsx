@@ -5,15 +5,26 @@ import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { isLocalMode } from "@/lib/data/mode";
 import { localDb } from "@/lib/local-db/store";
+import {
+  addCourse as addCourseRepo,
+  deleteCourse as deleteCourseRepo,
+  fetchCourses,
+  reorderCourse as reorderCourseRepo,
+  seedDefaultCourses,
+  seedDefaultSubjects,
+  updateCourse as updateCourseRepo,
+} from "@/lib/data/school-repository";
+import { useSchoolContext } from "@/hooks/use-school-context";
 import type { Course, Cycle } from "@/types";
 import { CYCLE_LABELS, CYCLE_ORDER } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
+import { ConfigGuide } from "@/components/layout/config-guide";
 import { ConfirmDialog } from "@/components/layout/confirm-dialog";
 import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -23,8 +34,7 @@ import {
 } from "@/components/ui/select";
 
 export default function CoursesPage() {
-  const [schoolId, setSchoolId] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const { context, loading: ctxLoading } = useSchoolContext();
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
@@ -37,68 +47,159 @@ export default function CoursesPage() {
     diversificacion: false,
   });
 
-  function load() {
-    if (!isLocalMode()) return;
-    const ctx = localDb.getSchoolContext();
-    if (!ctx) return;
-    setSchoolId(ctx.schoolId);
-    setIsAdmin(ctx.isAdmin);
-    setCourses(localDb.getSchoolData(ctx.schoolId).courses);
+  const schoolId = context?.schoolId ?? null;
+  const isAdmin = context?.isAdmin ?? false;
+
+  async function load() {
+    if (!context) return;
+
+    if (isLocalMode()) {
+      setCourses(localDb.getSchoolData(context.schoolId).courses);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setCourses(await fetchCourses(context.schoolId));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error al cargar cursos");
+    }
     setLoading(false);
   }
 
   useEffect(() => {
+    if (!context) return;
     load();
-  }, []);
+  }, [context]);
 
-  function saveCourse(course: Course) {
+  async function saveCourse(course: Course) {
     if (isLocalMode()) {
       localDb.updateCourse(course.id, { name: course.name, cycle: course.cycle });
       toast.success("Curso guardado");
+      return;
     }
+
+    const { error } = await updateCourseRepo(course.id, {
+      name: course.name,
+      cycle: course.cycle,
+    });
+    if (error) toast.error(error);
+    else toast.success("Curso guardado");
   }
 
-  function addCourse() {
+  async function addCourse() {
     if (!schoolId || !newName.trim()) return;
+
     if (isLocalMode()) {
       const c = localDb.addCourse(schoolId, newName, newCycle);
       setCourses((prev) => [...prev, c]);
       setNewName("");
       toast.success("Curso añadido");
+      return;
     }
+
+    const { course, error } = await addCourseRepo(schoolId, newName, newCycle);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    if (course) setCourses((prev) => [...prev, course]);
+    setNewName("");
+    toast.success("Curso añadido");
   }
 
-  function deleteCourse(id: string) {
+  async function deleteCourse(id: string) {
     if (isLocalMode()) {
       localDb.deleteCourse(id);
       setCourses((prev) => prev.filter((c) => c.id !== id));
       toast.success("Curso eliminado");
+      return;
     }
+
+    const { error } = await deleteCourseRepo(id);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    setCourses((prev) => prev.filter((c) => c.id !== id));
+    toast.success("Curso eliminado");
   }
 
-  function restoreTemplate() {
+  async function restoreTemplate() {
     if (!schoolId) return;
+
     if (isLocalMode()) {
       localDb.seedDefaultCourses(schoolId, true);
-      load();
-      toast.success("Plantilla 3+6+4+1 restaurada");
+      await load();
+      toast.success("Plantilla de ejemplo cargada");
+      return;
     }
+
+    const { error } = await seedDefaultCourses(schoolId, true);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    await load();
+    toast.success("Plantilla de ejemplo cargada");
   }
 
-  if (loading) return <PageLoadingSkeleton />;
+  async function loadExampleSubjects() {
+    if (!schoolId) return;
+
+    if (isLocalMode()) {
+      const { error } = localDb.seedDefaultSubjects(schoolId);
+      if (error) {
+        toast.error(error);
+        return;
+      }
+      toast.success("Asignaturas de ejemplo cargadas");
+      return;
+    }
+
+    const { error } = await seedDefaultSubjects(schoolId);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    toast.success("Asignaturas de ejemplo cargadas");
+  }
+
+  async function handleReorder(courseId: string, direction: "up" | "down") {
+    if (isLocalMode()) {
+      localDb.reorderCourse(courseId, direction);
+      await load();
+      return;
+    }
+
+    const { error } = await reorderCourseRepo(courseId, direction);
+    if (error) toast.error(error);
+    else await load();
+  }
+
+  if (ctxLoading || loading) return <PageLoadingSkeleton />;
 
   return (
     <div className="space-y-6">
+      <ConfigGuide />
+
       <PageHeader
         title="Cursos"
-        description="3 Infantil + 6 Primaria + 4 Secundaria + 1 Diversificación por defecto. Puedes añadir, quitar y renombrar libremente."
+        description="Añade los cursos de tu centro; no hay límite de cantidad."
       >
         {isAdmin && (
-          <Hint label="Reemplaza todos los cursos por la plantilla estándar 3+6+4+1">
-            <Button variant="outline" onClick={restoreTemplate}>
-              Restaurar plantilla 3+6+4+1
-            </Button>
-          </Hint>
+          <>
+            <Hint label="Reemplaza todos los cursos por una plantilla de ejemplo (Infantil, Primaria, Secundaria y Diversificación)">
+              <Button variant="outline" onClick={restoreTemplate}>
+                Cargar plantilla de ejemplo
+              </Button>
+            </Hint>
+            <Hint label="Añade asignaturas típicas si aún no tienes ninguna configurada">
+              <Button variant="outline" onClick={loadExampleSubjects}>
+                Cargar asignaturas de ejemplo
+              </Button>
+            </Hint>
+          </>
         )}
       </PageHeader>
 
@@ -134,6 +235,14 @@ export default function CoursesPage() {
         </Card>
       )}
 
+      {courses.length === 0 && (
+        <Card>
+          <CardContent className="py-8 text-center text-sm text-muted-foreground">
+            Empieza cargando la plantilla de ejemplo o añade cursos manualmente.
+          </CardContent>
+        </Card>
+      )}
+
       {CYCLE_ORDER.map((cycle) => {
         const items = courses.filter((c) => c.cycle === cycle);
         return (
@@ -159,7 +268,10 @@ export default function CoursesPage() {
             {!collapsed[cycle] && (
               <CardContent className="space-y-2">
                 {items.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No hay cursos en esta etapa.</p>
+                  <CardDescription>
+                    No hay cursos en esta etapa. Empieza cargando la plantilla de ejemplo o añade
+                    cursos manualmente.
+                  </CardDescription>
                 )}
                 {items.map((course) => (
                   <div key={course.id} className="flex flex-wrap items-center gap-2 rounded-lg border p-3">
@@ -183,18 +295,14 @@ export default function CoursesPage() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() =>
-                            localDb.reorderCourse(course.id, "up") && load()
-                          }
+                          onClick={() => handleReorder(course.id, "up")}
                         >
                           <ChevronUp className="h-4 w-4" />
                         </Button>
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() =>
-                            localDb.reorderCourse(course.id, "down") && load()
-                          }
+                          onClick={() => handleReorder(course.id, "down")}
                         >
                           <ChevronDown className="h-4 w-4" />
                         </Button>

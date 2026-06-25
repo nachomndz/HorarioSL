@@ -6,7 +6,8 @@ import { toast } from "sonner";
 import { isLocalMode } from "@/lib/data/mode";
 import { localDb } from "@/lib/local-db/store";
 import { fetchSolverInput } from "@/lib/solver/fetch-input";
-import { solveInWorker } from "@/lib/solver/runner";
+import { solveBestInWorker } from "@/lib/solver/runner";
+import { validateSolverInput } from "@/lib/solver/validate";
 import { downloadBlob, exportScheduleToExcel } from "@/lib/excel/export";
 import type {
   Course,
@@ -168,14 +169,26 @@ export default function ScheduleDetailPage() {
       return;
     }
 
-    const result = await solveInWorker(input);
+    const validation = validateSolverInput(input);
+    if (validation.errors.length > 0) {
+      toast.error(validation.errors.slice(0, 3).join(" · "));
+      return;
+    }
+
+    const result = await solveBestInWorker(input);
 
     if (isLocalMode()) {
       localDb.updateSchedule(schedule.id, {
         generation_stats: result.stats,
         entries: result.entries,
       });
-      toast.success("Horario regenerado");
+      if (result.stats.unplaced_sessions > 0) {
+        toast.warning(
+          `Regenerado con ${result.stats.unplaced_sessions} sesión(es) sin colocar`
+        );
+      } else {
+        toast.success("Horario regenerado");
+      }
       loadData();
       return;
     }
@@ -204,7 +217,13 @@ export default function ScheduleDetailPage() {
       })
       .eq("id", schedule.id);
 
-    toast.success("Horario regenerado");
+    if (result.stats.unplaced_sessions > 0) {
+      toast.warning(
+        `Regenerado con ${result.stats.unplaced_sessions} sesión(es) sin colocar`
+      );
+    } else {
+      toast.success("Horario regenerado");
+    }
     loadData();
   }
 
@@ -413,6 +432,20 @@ export default function ScheduleDetailPage() {
           </Hint>
         )}
       </PageHeader>
+
+      {stats && stats.unplaced_sessions > 0 && (
+        <Card className="border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
+          <CardContent className="pt-6">
+            <p className="font-medium text-amber-900 dark:text-amber-100">
+              Horario incompleto
+            </p>
+            <p className="mt-1 text-sm text-amber-800 dark:text-amber-200">
+              Faltan {stats.unplaced_sessions} de {stats.total_sessions} sesiones por colocar.
+              Revisa profesores, disponibilidad y la matriz de horas, o ajusta manualmente.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {stats && (
         <Card>

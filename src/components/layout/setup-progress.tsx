@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 interface SetupStep {
   id: string;
   label: string;
+  description?: string;
   done: boolean;
   href: string;
 }
@@ -35,17 +36,23 @@ export function SetupProgress({ steps }: { steps: SetupStep[] }) {
           <Link
             key={step.id}
             href={step.href}
+            title={step.description}
             className={cn(
-              "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors hover:bg-muted",
+              "flex flex-col gap-0.5 rounded-lg border px-3 py-2 text-sm transition-colors hover:bg-muted",
               step.done && "border-green-200 bg-green-50/50"
             )}
           >
-            {step.done ? (
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" />
-            ) : (
-              <Circle className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="flex items-center gap-2">
+              {step.done ? (
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" />
+              ) : (
+                <Circle className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
+              <span className={step.done ? "text-green-800" : ""}>{step.label}</span>
+            </span>
+            {step.description && (
+              <span className="pl-6 text-xs text-muted-foreground">{step.description}</span>
             )}
-            <span className={step.done ? "text-green-800" : ""}>{step.label}</span>
           </Link>
         ))}
       </CardContent>

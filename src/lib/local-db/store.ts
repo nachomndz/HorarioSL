@@ -1,4 +1,12 @@
 import type { Cycle, RecessConfig, Schedule } from "@/types";
+import {
+  INVITADO_PASSWORD_HASH,
+  SAN_LORENZO_LOGIN_ID,
+  SAN_LORENZO_PASSWORD_HASH,
+  SAN_LORENZO_SCHOOL_NAME,
+  isSanLorenzoUsername,
+} from "@/lib/auth/credentials";
+import { hashPassword, isPasswordHash, verifyPassword } from "@/lib/auth/password";
 import { generateTimeSlots } from "@/lib/timetable";
 import { DEFAULT_COURSES_TEMPLATE } from "@/lib/utils";
 import { DB_KEY, SESSION_KEY, newId, nowIso } from "./utils";
@@ -56,6 +64,37 @@ function generateSlotsForSchool(db: LocalDatabase, schoolId: string) {
   }
 }
 
+
+async function migrateUserPasswords(db: LocalDatabase): Promise<void> {
+  let changed = false;
+  for (const user of db.users) {
+    if (isPasswordHash(user.password)) continue;
+
+    if (user.email === SAN_LORENZO_LOGIN_ID) {
+      user.password = SAN_LORENZO_PASSWORD_HASH;
+    } else if (user.password === "invitado") {
+      user.password = INVITADO_PASSWORD_HASH;
+    } else {
+      user.password = await hashPassword(user.password);
+    }
+    changed = true;
+  }
+  if (changed) writeDb(db);
+}
+
+const DEFAULT_SUBJECTS = [
+  ["Lengua Castellana", "Lengua", "#ef4444"],
+  ["Matemáticas", "Mates", "#3b82f6"],
+  ["Inglés", "Inglés", "#22c55e"],
+  ["Ciencias Naturales", "CN", "#14b8a6"],
+  ["Ciencias Sociales", "CS", "#f59e0b"],
+  ["Educación Física", "EF", "#8b5cf6"],
+  ["Plástica", "Plástica", "#ec4899"],
+  ["Música", "Música", "#6366f1"],
+  ["Religión", "Religión", "#64748b"],
+  ["Valores", "Valores", "#84cc16"],
+] as const;
+
 function seedCourses(db: LocalDatabase, schoolId: string) {
   DEFAULT_COURSES_TEMPLATE.forEach((c, i) => {
     db.courses.push({
@@ -69,44 +108,38 @@ function seedCourses(db: LocalDatabase, schoolId: string) {
   });
 }
 
-function seedSchool(db: LocalDatabase, schoolId: string) {
-  const yearStart = new Date().getFullYear();
-  db.academicYears.push({
-    id: newId(),
-    school_id: schoolId,
-    name: `${yearStart}/${yearStart + 1}`,
-    is_active: true,
-    created_at: nowIso(),
-  });
+function seedSchoolCore(db: LocalDatabase, schoolId: string) {
+  if (!db.academicYears.some((y) => y.school_id === schoolId)) {
+    const yearStart = new Date().getFullYear();
+    db.academicYears.push({
+      id: newId(),
+      school_id: schoolId,
+      name: `${yearStart}/${yearStart + 1}`,
+      is_active: true,
+      created_at: nowIso(),
+    });
+  }
 
-  db.timetableSettings.push({
-    id: newId(),
-    school_id: schoolId,
-    school_days: [1, 2, 3, 4, 5],
-    day_start: "09:00:00",
-    day_end: "16:00:00",
-    session_duration_minutes: 45,
-    recesses: [{ start: "11:30", duration_minutes: 30 }] as RecessConfig[],
-    updated_at: nowIso(),
-  });
+  if (!db.timetableSettings.some((t) => t.school_id === schoolId)) {
+    db.timetableSettings.push({
+      id: newId(),
+      school_id: schoolId,
+      school_days: [1, 2, 3, 4, 5],
+      day_start: "09:00:00",
+      day_end: "16:00:00",
+      session_duration_minutes: 45,
+      recesses: [{ start: "11:30", duration_minutes: 30 }] as RecessConfig[],
+      updated_at: nowIso(),
+    });
+  }
 
-  seedCourses(db, schoolId);
-  generateSlotsForSchool(db, schoolId);
+  if (!db.timeSlots.some((t) => t.school_id === schoolId)) {
+    generateSlotsForSchool(db, schoolId);
+  }
+}
 
-  const subjects = [
-    ["Lengua Castellana", "Lengua", "#ef4444"],
-    ["Matemáticas", "Mates", "#3b82f6"],
-    ["Inglés", "Inglés", "#22c55e"],
-    ["Ciencias Naturales", "CN", "#14b8a6"],
-    ["Ciencias Sociales", "CS", "#f59e0b"],
-    ["Educación Física", "EF", "#8b5cf6"],
-    ["Plástica", "Plástica", "#ec4899"],
-    ["Música", "Música", "#6366f1"],
-    ["Religión", "Religión", "#64748b"],
-    ["Valores", "Valores", "#84cc16"],
-  ] as const;
-
-  for (const [name, short_name, color] of subjects) {
+function seedDefaultSubjects(db: LocalDatabase, schoolId: string) {
+  for (const [name, short_name, color] of DEFAULT_SUBJECTS) {
     db.subjects.push({
       id: newId(),
       school_id: schoolId,
@@ -118,47 +151,201 @@ function seedSchool(db: LocalDatabase, schoolId: string) {
   }
 }
 
+const HOURS_BY_CYCLE: Record<Cycle, Record<string, number>> = {
+  infantil: {
+    "Lengua Castellana": 4,
+    "Matemáticas": 3,
+    "Inglés": 2,
+    "Educación Física": 2,
+    "Plástica": 2,
+    "Música": 2,
+    "Valores": 2,
+  },
+  primaria: {
+    "Lengua Castellana": 5,
+    "Matemáticas": 4,
+    "Inglés": 3,
+    "Ciencias Naturales": 2,
+    "Ciencias Sociales": 2,
+    "Educación Física": 2,
+    "Plástica": 1,
+    "Música": 1,
+    "Religión": 1,
+    "Valores": 1,
+  },
+  secundaria: {
+    "Lengua Castellana": 4,
+    "Matemáticas": 4,
+    "Inglés": 3,
+    "Ciencias Naturales": 3,
+    "Ciencias Sociales": 3,
+    "Educación Física": 2,
+    "Plástica": 1,
+    "Música": 1,
+    "Religión": 1,
+    "Valores": 1,
+  },
+  diversificacion: {
+    "Lengua Castellana": 4,
+    "Matemáticas": 3,
+    "Inglés": 2,
+    "Ciencias Naturales": 2,
+    "Ciencias Sociales": 2,
+    "Educación Física": 3,
+    "Plástica": 2,
+    "Música": 1,
+    "Valores": 2,
+  },
+};
+
+function seedDefaultTeachers(db: LocalDatabase, schoolId: string) {
+  const subjects = db.subjects.filter((s) => s.school_id === schoolId);
+  if (!subjects.length) return;
+
+  const existing = db.teachers.filter((t) => t.school_id === schoolId);
+  if (existing.length > 0) {
+    for (const teacher of existing) {
+      if (teacher.max_weekly_hours < 45) {
+        teacher.max_weekly_hours = 45;
+      }
+    }
+    return;
+  }
+
+  for (const subject of subjects) {
+    const teacher = {
+      id: newId(),
+      school_id: schoolId,
+      name: `Prof. ${subject.short_name || subject.name}`,
+      max_weekly_hours: 45,
+      notes: null,
+      scope_type: "all" as const,
+      scope_cycle: null,
+      created_at: nowIso(),
+    };
+    db.teachers.push(teacher);
+    db.teacherSubjects.push({ teacher_id: teacher.id, subject_id: subject.id });
+  }
+}
+
+function seedDefaultHours(db: LocalDatabase, schoolId: string) {
+  const courses = db.courses.filter((c) => c.school_id === schoolId);
+  const subjects = db.subjects.filter((s) => s.school_id === schoolId);
+  if (!courses.length || !subjects.length) return;
+
+  for (const course of courses) {
+    const template = HOURS_BY_CYCLE[course.cycle];
+    for (const subject of subjects) {
+      const weekly_hours = template[subject.name] ?? 0;
+      if (weekly_hours <= 0) continue;
+      const existing = db.courseSubjectHours.find(
+        (h) => h.course_id === course.id && h.subject_id === subject.id
+      );
+      if (existing) {
+        existing.weekly_hours = weekly_hours;
+      } else {
+        db.courseSubjectHours.push({
+          id: newId(),
+          course_id: course.id,
+          subject_id: subject.id,
+          weekly_hours,
+        });
+      }
+    }
+  }
+}
+
+function seedScheduleInput(db: LocalDatabase, schoolId: string) {
+  if (!db.courses.some((c) => c.school_id === schoolId)) {
+    seedCourses(db, schoolId);
+  }
+  if (!db.subjects.some((s) => s.school_id === schoolId)) {
+    seedDefaultSubjects(db, schoolId);
+  }
+  if (!db.teachers.some((t) => t.school_id === schoolId)) {
+    seedDefaultTeachers(db, schoolId);
+  }
+  if (
+    !db.courseSubjectHours.some(
+      (h) => h.weekly_hours > 0 && db.courses.some((c) => c.id === h.course_id && c.school_id === schoolId)
+    )
+  ) {
+    seedDefaultHours(db, schoolId);
+  }
+}
+
+function ensureSanLorenzoSchool(db: LocalDatabase): string {
+  let school = db.schools.find((s) => s.name === SAN_LORENZO_SCHOOL_NAME);
+  let schoolId: string;
+
+  if (!school) {
+    schoolId = newId();
+    db.schools.push({
+      id: schoolId,
+      name: SAN_LORENZO_SCHOOL_NAME,
+      created_at: nowIso(),
+    });
+    seedSchoolCore(db, schoolId);
+    seedScheduleInput(db, schoolId);
+  } else {
+    schoolId = school.id;
+    seedSchoolCore(db, schoolId);
+    seedScheduleInput(db, schoolId);
+  }
+
+  let user = db.users.find((u) => u.email === SAN_LORENZO_LOGIN_ID);
+  if (!user) {
+    user = {
+      id: newId(),
+      email: SAN_LORENZO_LOGIN_ID,
+      password: SAN_LORENZO_PASSWORD_HASH,
+    };
+    db.users.push(user);
+  } else if (!isPasswordHash(user.password)) {
+    user.password = SAN_LORENZO_PASSWORD_HASH;
+  }
+
+  if (
+    !db.schoolMembers.some(
+      (m) => m.school_id === schoolId && m.user_id === user!.id
+    )
+  ) {
+    db.schoolMembers.push({
+      id: newId(),
+      school_id: schoolId,
+      user_id: user.id,
+      role: "admin",
+      created_at: nowIso(),
+    });
+  }
+
+  return user.id;
+}
+
 export const localDb = {
   getSession(): LocalSession | null {
     return readSession();
   },
 
-  login(email: string, password: string): { error?: string } {
-    const db = readDb();
-    const user = db.users.find((u) => u.email === email.trim().toLowerCase());
-    if (!user || user.password !== password) {
-      return { error: "Email o contraseña incorrectos" };
+  login: async (username: string, password: string): Promise<{ error?: string }> => {
+    if (!isSanLorenzoUsername(username)) {
+      return { error: "Usuario o contraseña incorrectos" };
     }
+
+    const passwordOk = await verifyPassword(password, SAN_LORENZO_PASSWORD_HASH);
+    if (!passwordOk) {
+      return { error: "Usuario o contraseña incorrectos" };
+    }
+
+    const db = readDb();
+    await migrateUserPasswords(db);
+    const userId = ensureSanLorenzoSchool(db);
+    const user = db.users.find((u) => u.id === userId);
+    if (!user) {
+      return { error: "Error al inicializar el colegio" };
+    }
+
     const session = { userId: user.id, email: user.email };
-    writeSession(session);
-    db.session = session;
-    writeDb(db);
-    return {};
-  },
-
-  register(schoolName: string, email: string, password: string): { error?: string } {
-    const db = readDb();
-    const normalizedEmail = email.trim().toLowerCase();
-    if (db.users.some((u) => u.email === normalizedEmail)) {
-      return { error: "Ya existe una cuenta con ese email" };
-    }
-
-    const userId = newId();
-    const schoolId = newId();
-
-    db.users.push({ id: userId, email: normalizedEmail, password });
-    db.schools.push({ id: schoolId, name: schoolName.trim(), created_at: nowIso() });
-    db.schoolMembers.push({
-      id: newId(),
-      school_id: schoolId,
-      user_id: userId,
-      role: "admin",
-      created_at: nowIso(),
-    });
-
-    seedSchool(db, schoolId);
-
-    const session = { userId, email: normalizedEmail };
     writeSession(session);
     db.session = session;
     writeDb(db);
@@ -287,8 +474,41 @@ export const localDb = {
     }
     const existing = db.courses.filter((c) => c.school_id === schoolId).length;
     if (existing === 0 || replace) {
-      if (replace) seedCourses(db, schoolId);
+      if (replace || existing === 0) seedCourses(db, schoolId);
     }
+    writeDb(db);
+    return {};
+  },
+
+  seedDefaultSubjects(schoolId: string) {
+    const db = readDb();
+    const existing = db.subjects.filter((s) => s.school_id === schoolId).length;
+    if (existing > 0) {
+      return { error: "Ya hay asignaturas configuradas" };
+    }
+    seedDefaultSubjects(db, schoolId);
+    writeDb(db);
+    return {};
+  },
+
+  seedDefaultTeachers(schoolId: string) {
+    const db = readDb();
+    if (!db.subjects.some((s) => s.school_id === schoolId)) {
+      return { error: "Añade asignaturas antes de cargar profesores de ejemplo" };
+    }
+    seedDefaultTeachers(db, schoolId);
+    writeDb(db);
+    return {};
+  },
+
+  seedDefaultHours(schoolId: string) {
+    const db = readDb();
+    const courses = db.courses.filter((c) => c.school_id === schoolId);
+    const subjects = db.subjects.filter((s) => s.school_id === schoolId);
+    if (!courses.length || !subjects.length) {
+      return { error: "Configura cursos y asignaturas antes de cargar horas de ejemplo" };
+    }
+    seedDefaultHours(db, schoolId);
     writeDb(db);
     return {};
   },
@@ -684,7 +904,7 @@ export const localDb = {
     const normalizedEmail = email.trim().toLowerCase();
     let user = db.users.find((u) => u.email === normalizedEmail);
     if (!user) {
-      user = { id: newId(), email: normalizedEmail, password: "invitado" };
+      user = { id: newId(), email: normalizedEmail, password: INVITADO_PASSWORD_HASH };
       db.users.push(user);
     }
     const exists = db.schoolMembers.some(

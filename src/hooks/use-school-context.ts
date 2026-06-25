@@ -24,7 +24,7 @@ export function useSchoolContext() {
       if (isLocalMode()) {
         const ctx = localDb.getSchoolContext();
         if (!ctx) {
-          router.replace("/registro");
+          router.replace("/login");
           return;
         }
         setContext({
@@ -43,7 +43,7 @@ export function useSchoolContext() {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) {
-        router.replace("/registro");
+        router.replace("/login");
         return;
       }
 
@@ -54,7 +54,7 @@ export function useSchoolContext() {
         .single();
 
       if (!member) {
-        router.replace("/registro");
+        router.replace("/login");
         return;
       }
 

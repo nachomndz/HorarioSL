@@ -1,15 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2, BookOpen, HelpCircle } from "lucide-react";
 import { toast } from "sonner";
 import { isLocalMode } from "@/lib/data/mode";
 import { localDb } from "@/lib/local-db/store";
+import {
+  addSubject as addSubjectRepo,
+  deleteSubject as deleteSubjectRepo,
+  fetchSubjectsData,
+  seedDefaultHours as seedDefaultHoursRepo,
+  updateSubject as updateSubjectRepo,
+  upsertCourseSubjectHours,
+} from "@/lib/data/school-repository";
+import { useSchoolContext } from "@/hooks/use-school-context";
 import type { Course, CourseSubjectHours, Cycle, Subject } from "@/types";
 import { CYCLE_LABELS, CYCLE_ORDER } from "@/lib/utils";
-import { countSessionSlots } from "@/lib/timetable";
 import { PageHeader } from "@/components/layout/page-header";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
+import { ConfigGuide } from "@/components/layout/config-guide";
 import { ConfirmDialog } from "@/components/layout/confirm-dialog";
 import { EmptyState } from "@/components/layout/empty-state";
 import { Button } from "@/components/ui/button";
@@ -24,11 +33,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { BookOpen } from "lucide-react";
+import { Hint } from "@/components/ui/hint";
 
 export default function SubjectsPage() {
-  const [schoolId, setSchoolId] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const { context, loading: ctxLoading } = useSchoolContext();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [hours, setHours] = useState<CourseSubjectHours[]>([]);
@@ -39,23 +47,40 @@ export default function SubjectsPage() {
   const [deleteSubjectId, setDeleteSubjectId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  function loadData() {
-    if (!isLocalMode()) return;
-    const ctx = localDb.getSchoolContext();
-    if (!ctx) return;
-    setSchoolId(ctx.schoolId);
-    setIsAdmin(ctx.isAdmin);
-    const data = localDb.getSchoolData(ctx.schoolId);
-    setSubjects(data.subjects);
-    setCourses(data.courses);
-    setHours(data.courseSubjectHours);
-    setSessionSlotsPerWeek(countSessionSlots(data.timeSlots));
+  const schoolId = context?.schoolId ?? null;
+  const isAdmin = context?.isAdmin ?? false;
+
+  async function loadData() {
+    if (!context) return;
+
+    if (isLocalMode()) {
+      const data = localDb.getSchoolData(context.schoolId);
+      setSubjects(data.subjects);
+      setCourses(data.courses);
+      setHours(data.courseSubjectHours);
+      setSessionSlotsPerWeek(
+        data.timeSlots.filter((s) => s.slot_type === "session").length
+      );
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const data = await fetchSubjectsData(context.schoolId);
+      setSubjects(data.subjects);
+      setCourses(data.courses);
+      setHours(data.hours);
+      setSessionSlotsPerWeek(data.sessionSlotsPerWeek);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error al cargar asignaturas");
+    }
     setLoading(false);
   }
 
   useEffect(() => {
+    if (!context) return;
     loadData();
-  }, []);
+  }, [context]);
 
   const filteredCourses =
     filterCycle === "all" ? courses : courses.filter((c) => c.cycle === filterCycle);
@@ -81,7 +106,7 @@ export default function SubjectsPage() {
     });
   }
 
-  function saveHours() {
+  async function saveHours() {
     if (!schoolId) return;
     for (const course of courses) {
       const total = subjects.reduce((sum, s) => sum + getHours(course.id, s.id), 0);
@@ -97,19 +122,61 @@ export default function SubjectsPage() {
         weekly_hours: getHours(course.id, subject.id),
       }))
     );
-    localDb.upsertCourseSubjectHours(rows);
+
+    if (isLocalMode()) {
+      localDb.upsertCourseSubjectHours(rows);
+      toast.success("Matriz guardada");
+      await loadData();
+      return;
+    }
+
+    const { error } = await upsertCourseSubjectHours(rows);
+    if (error) {
+      toast.error(error);
+      return;
+    }
     toast.success("Matriz guardada");
-    loadData();
+    await loadData();
   }
 
-  if (loading) return <PageLoadingSkeleton />;
+  if (ctxLoading || loading) return <PageLoadingSkeleton />;
 
   return (
     <div className="space-y-6">
+      <ConfigGuide />
+
       <PageHeader
         title="Asignaturas"
         description={`Define las asignaturas y las horas semanales por curso. Franjas disponibles: ${sessionSlotsPerWeek}/semana.`}
-      />
+      >
+        {isAdmin && (
+          <Hint label="Rellena la matriz con horas típicas por etapa (solo si aún no hay horas configuradas)">
+            <Button
+              variant="outline"
+              onClick={async () => {
+                if (!schoolId) return;
+                if (isLocalMode()) {
+                  const { error } = localDb.seedDefaultHours(schoolId);
+                  if (error) toast.error(error);
+                  else {
+                    await loadData();
+                    toast.success("Horas de ejemplo cargadas");
+                  }
+                  return;
+                }
+                const { error } = await seedDefaultHoursRepo(schoolId);
+                if (error) toast.error(error);
+                else {
+                  await loadData();
+                  toast.success("Horas de ejemplo cargadas");
+                }
+              }}
+            >
+              Cargar horas de ejemplo
+            </Button>
+          </Hint>
+        )}
+      </PageHeader>
 
       <Tabs defaultValue="subjects">
         <TabsList>
@@ -127,11 +194,22 @@ export default function SubjectsPage() {
                   onChange={(e) => setNewSubjectName(e.target.value)}
                 />
                 <Button
-                  onClick={() => {
+                  onClick={async () => {
                     if (!schoolId || !newSubjectName.trim()) return;
-                    localDb.addSubject(schoolId, newSubjectName);
+                    if (isLocalMode()) {
+                      localDb.addSubject(schoolId, newSubjectName);
+                      setNewSubjectName("");
+                      await loadData();
+                      toast.success("Asignatura añadida");
+                      return;
+                    }
+                    const { error } = await addSubjectRepo(schoolId, newSubjectName);
+                    if (error) {
+                      toast.error(error);
+                      return;
+                    }
                     setNewSubjectName("");
-                    loadData();
+                    await loadData();
                     toast.success("Asignatura añadida");
                   }}
                 >
@@ -213,14 +291,29 @@ export default function SubjectsPage() {
                   />
                 </div>
                 <Button
-                  onClick={() => {
-                    localDb.updateSubject(editSubject.id, {
+                  onClick={async () => {
+                    if (isLocalMode()) {
+                      localDb.updateSubject(editSubject.id, {
+                        name: editSubject.name,
+                        short_name: editSubject.short_name ?? undefined,
+                        color: editSubject.color ?? undefined,
+                      });
+                      setEditSubject(null);
+                      await loadData();
+                      toast.success("Asignatura actualizada");
+                      return;
+                    }
+                    const { error } = await updateSubjectRepo(editSubject.id, {
                       name: editSubject.name,
                       short_name: editSubject.short_name ?? undefined,
                       color: editSubject.color ?? undefined,
                     });
+                    if (error) {
+                      toast.error(error);
+                      return;
+                    }
                     setEditSubject(null);
-                    loadData();
+                    await loadData();
                     toast.success("Asignatura actualizada");
                   }}
                 >
@@ -250,6 +343,11 @@ export default function SubjectsPage() {
                 ))}
               </SelectContent>
             </Select>
+            <Hint label="El total por fila no debe superar las franjas lectivas de la malla">
+              <button type="button" className="text-muted-foreground hover:text-foreground">
+                <HelpCircle className="h-4 w-4" />
+              </button>
+            </Hint>
             {isAdmin && <Button onClick={saveHours}>Guardar matriz</Button>}
           </div>
 
@@ -313,12 +411,21 @@ export default function SubjectsPage() {
         description="Se eliminarán las horas y referencias en horarios."
         variant="destructive"
         confirmLabel="Eliminar"
-        onConfirm={() => {
-          if (deleteSubjectId) {
+        onConfirm={async () => {
+          if (!deleteSubjectId) return;
+          if (isLocalMode()) {
             localDb.deleteSubject(deleteSubjectId);
-            loadData();
+            await loadData();
             toast.success("Asignatura eliminada");
+            return;
           }
+          const { error } = await deleteSubjectRepo(deleteSubjectId);
+          if (error) {
+            toast.error(error);
+            return;
+          }
+          await loadData();
+          toast.success("Asignatura eliminada");
         }}
       />
     </div>

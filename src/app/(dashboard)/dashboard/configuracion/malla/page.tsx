@@ -1,15 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { HelpCircle, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { isLocalMode } from "@/lib/data/mode";
 import { localDb } from "@/lib/local-db/store";
+import {
+  fetchTimetableSettings,
+  saveTimetableSettings,
+} from "@/lib/data/school-repository";
 import { generateTimeSlots, countSessionSlots } from "@/lib/timetable";
+import { useSchoolContext } from "@/hooks/use-school-context";
 import type { RecessConfig } from "@/types";
 import { WeeklyGridPreview } from "@/components/timetable/weekly-grid-preview";
 import { PageHeader } from "@/components/layout/page-header";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
+import { ConfigGuide } from "@/components/layout/config-guide";
+import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,8 +27,7 @@ import { Badge } from "@/components/ui/badge";
 const DEFAULT_DAYS = [1, 2, 3, 4, 5];
 
 export default function TimetableConfigPage() {
-  const [schoolId, setSchoolId] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const { context, loading: ctxLoading } = useSchoolContext();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState({
@@ -32,6 +38,9 @@ export default function TimetableConfigPage() {
     recesses: [{ start: "11:30", duration_minutes: 30 }] as RecessConfig[],
   });
 
+  const schoolId = context?.schoolId ?? null;
+  const isAdmin = context?.isAdmin ?? false;
+
   const computedPreview = useMemo(() => {
     if (!schoolId) return [];
     return generateTimeSlots(schoolId, settings);
@@ -40,24 +49,36 @@ export default function TimetableConfigPage() {
   const sessionCount = countSessionSlots(computedPreview);
 
   useEffect(() => {
-    if (!isLocalMode()) return;
-    const ctx = localDb.getSchoolContext();
-    if (!ctx) return;
-    setSchoolId(ctx.schoolId);
-    setIsAdmin(ctx.isAdmin);
-    const data = localDb.getSchoolData(ctx.schoolId);
-    if (data.timetableSettings) {
-      const s = data.timetableSettings;
-      setSettings({
-        school_days: s.school_days,
-        day_start: s.day_start.slice(0, 5),
-        day_end: s.day_end.slice(0, 5),
-        session_duration_minutes: s.session_duration_minutes,
-        recesses: s.recesses as RecessConfig[],
-      });
+    if (!context) return;
+
+    async function load() {
+      if (isLocalMode()) {
+        const data = localDb.getSchoolData(context!.schoolId);
+        if (data.timetableSettings) {
+          const s = data.timetableSettings;
+          setSettings({
+            school_days: s.school_days,
+            day_start: s.day_start.slice(0, 5),
+            day_end: s.day_end.slice(0, 5),
+            session_duration_minutes: s.session_duration_minutes,
+            recesses: s.recesses as RecessConfig[],
+          });
+        }
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const saved = await fetchTimetableSettings(context!.schoolId);
+        if (saved) setSettings(saved);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Error al cargar la malla");
+      }
+      setLoading(false);
     }
-    setLoading(false);
-  }, []);
+
+    load();
+  }, [context]);
 
   function toggleDay(day: number) {
     setSettings((prev) => ({
@@ -92,27 +113,43 @@ export default function TimetableConfigPage() {
   async function handleSave() {
     if (!schoolId || !isAdmin) return;
     setSaving(true);
+
     if (isLocalMode()) {
       const result = localDb.saveTimetableSettings(schoolId, settings);
       setSaving(false);
       toast.success(
         `Malla guardada: ${result.slotCount} sesiones lectivas. Se han reseteado las restricciones de disponibilidad de profesores.`
       );
+      return;
     }
+
+    const result = await saveTimetableSettings(schoolId, settings);
+    setSaving(false);
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success(
+      `Malla guardada: ${result.slotCount} sesiones lectivas. Se han reseteado las restricciones de disponibilidad de profesores.`
+    );
   }
 
-  if (loading) return <PageLoadingSkeleton />;
+  if (ctxLoading || loading) return <PageLoadingSkeleton />;
 
   return (
     <div className="space-y-6">
+      <ConfigGuide />
+
       <PageHeader
         title="Malla horaria"
         description="Define la estructura de la jornada escolar. La rejilla de la derecha muestra cómo quedará el horario."
       >
         {isAdmin && (
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? "Guardando..." : "Guardar malla"}
-          </Button>
+          <Hint label="Regenera las franjas horarias; revisa después la disponibilidad de profesores">
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? "Guardando..." : "Guardar malla"}
+            </Button>
+          </Hint>
         )}
       </PageHeader>
 
@@ -126,7 +163,14 @@ export default function TimetableConfigPage() {
         <div className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">1. Días lectivos</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                1. Días lectivos
+                <Hint label="Marca los días en los que hay clase">
+                  <button type="button" className="text-muted-foreground hover:text-foreground">
+                    <HelpCircle className="h-4 w-4" />
+                  </button>
+                </Hint>
+              </CardTitle>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-4">
               {[1, 2, 3, 4, 5].map((day) => (
@@ -144,7 +188,14 @@ export default function TimetableConfigPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">2. Jornada escolar</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                2. Jornada escolar
+                <Hint label="Hora de entrada, salida y duración de cada sesión lectiva">
+                  <button type="button" className="text-muted-foreground hover:text-foreground">
+                    <HelpCircle className="h-4 w-4" />
+                  </button>
+                </Hint>
+              </CardTitle>
             </CardHeader>
             <CardContent className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
@@ -187,7 +238,14 @@ export default function TimetableConfigPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle className="text-base">3. Recreos</CardTitle>
+                <CardTitle className="text-base flex items-center gap-2">
+                  3. Recreos
+                  <Hint label="Los recreos dividen la jornada; no cuentan como sesión lectiva">
+                    <button type="button" className="text-muted-foreground hover:text-foreground">
+                      <HelpCircle className="h-4 w-4" />
+                    </button>
+                  </Hint>
+                </CardTitle>
                 <CardDescription>Añade uno o varios recreos en la jornada.</CardDescription>
               </div>
               {isAdmin && (

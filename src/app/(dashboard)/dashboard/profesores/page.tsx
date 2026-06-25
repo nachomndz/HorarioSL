@@ -9,6 +9,7 @@ import { localDb } from "@/lib/local-db/store";
 import type { Teacher } from "@/types";
 import { CYCLE_LABELS } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
+import { ConfigGuide } from "@/components/layout/config-guide";
 import { PageLoadingSkeleton, TableLoadingSkeleton } from "@/components/layout/loading-skeletons";
 import { ConfirmDialog } from "@/components/layout/confirm-dialog";
 import { EmptyState } from "@/components/layout/empty-state";
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Hint } from "@/components/ui/hint";
 
 export default function TeachersPage() {
   const [schoolId, setSchoolId] = useState<string | null>(null);
@@ -135,10 +137,31 @@ export default function TeachersPage() {
 
   return (
     <div className="space-y-6">
+      <ConfigGuide />
+
       <PageHeader
         title="Profesores"
         description="Configura horas máximas, asignaturas, cursos y disponibilidad de cada profesor."
-      />
+      >
+        {isAdmin && isLocalMode() && (
+          <Hint label="Crea un profesor por asignatura con alcance en todo el colegio (solo si aún no hay profesores)">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (!schoolId) return;
+                const { error } = localDb.seedDefaultTeachers(schoolId);
+                if (error) toast.error(error);
+                else {
+                  loadTeachers();
+                  toast.success("Profesores de ejemplo cargados");
+                }
+              }}
+            >
+              Cargar profesores de ejemplo
+            </Button>
+          </Hint>
+        )}
+      </PageHeader>
 
       {isAdmin && (
         <Card>

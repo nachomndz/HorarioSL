@@ -74,6 +74,17 @@ function getEligibleTeachers(
   );
 }
 
+function orderSessionSlots(slots: TimeSlot[], randomize: boolean): TimeSlot[] {
+  const sessions = slots.filter((s) => s.slot_type === "session");
+  if (randomize) {
+    return [...sessions].sort(() => Math.random() - 0.5);
+  }
+  return [...sessions].sort((a, b) => {
+    if (a.day_of_week !== b.day_of_week) return a.day_of_week - b.day_of_week;
+    return a.start_time.localeCompare(b.start_time);
+  });
+}
+
 function isTeacherUnavailable(
   teacherId: string,
   timeSlotId: string,
@@ -95,10 +106,17 @@ function sortDemand(demand: SessionDemand[], input: SolverInput): SessionDemand[
 
 export function solveSchedule(
   input: SolverInput,
-  options?: { maxIterations?: number; onProgress?: (placed: number, total: number) => void }
+  options?: {
+    maxIterations?: number;
+    randomizeSlots?: boolean;
+    onProgress?: (placed: number, total: number) => void;
+  }
 ): SolverResult {
   const start = Date.now();
-  const sessionSlots = input.timeSlots.filter((s) => s.slot_type === "session");
+  const sessionSlots = orderSessionSlots(
+    input.timeSlots,
+    options?.randomizeSlots ?? false
+  );
   const demand = sortDemand(buildDemand(input.courseSubjectHours), input);
 
   const placed: PlacedSession[] = [];
@@ -132,7 +150,10 @@ export function solveSchedule(
       return backtrack(index + 1);
     }
 
-    const shuffledSlots = [...sessionSlots].sort(() => Math.random() - 0.5);
+    const shuffledSlots =
+      options?.randomizeSlots === false
+        ? sessionSlots
+        : [...sessionSlots].sort(() => Math.random() - 0.5);
 
     for (const slot of shuffledSlots) {
       if (courseSlotUsed.has(`${session.courseId}:${slot.id}`)) continue;
@@ -200,6 +221,39 @@ export function solveSchedule(
       duration_ms: Date.now() - start,
     },
   };
+}
+
+export function solveScheduleBest(
+  input: SolverInput,
+  options?: {
+    attempts?: number;
+    maxIterations?: number;
+    onProgress?: (placed: number, total: number) => void;
+  }
+): SolverResult {
+  const attempts = options?.attempts ?? 15;
+  let best: SolverResult | null = null;
+
+  for (let i = 0; i < attempts; i++) {
+    const result = solveSchedule(input, {
+      maxIterations: options?.maxIterations,
+      randomizeSlots: i > 0,
+      onProgress: options?.onProgress,
+    });
+
+    if (
+      !best ||
+      result.stats.placed_sessions > best.stats.placed_sessions ||
+      (result.stats.placed_sessions === best.stats.placed_sessions &&
+        result.unplaced.length < best.unplaced.length)
+    ) {
+      best = result;
+    }
+
+    if (best.stats.unplaced_sessions === 0) break;
+  }
+
+  return best!;
 }
 
 export function getUniqueSlotTimes(slots: TimeSlot[]): string[] {

@@ -8,7 +8,8 @@ import { toast } from "sonner";
 import { isLocalMode } from "@/lib/data/mode";
 import { localDb } from "@/lib/local-db/store";
 import { fetchSolverInput } from "@/lib/solver/fetch-input";
-import { solveInWorker } from "@/lib/solver/runner";
+import { solveBestInWorker } from "@/lib/solver/runner";
+import { validateSolverInput } from "@/lib/solver/validate";
 import type { AcademicYear, Schedule } from "@/types";
 import { PageHeader } from "@/components/layout/page-header";
 import { PageLoadingSkeleton } from "@/components/layout/loading-skeletons";
@@ -97,9 +98,24 @@ export default function SchedulesPage() {
       return;
     }
 
-    const result = await solveInWorker(input, (placed, total) =>
-      setProgress(Math.round((placed / total) * 100))
-    );
+    const validation = validateSolverInput(input);
+    if (validation.errors.length > 0) {
+      setGenerating(false);
+      toast.error(validation.errors.slice(0, 3).join(" · "), {
+        description:
+          validation.errors.length > 3
+            ? `Y ${validation.errors.length - 3} error(es) más`
+            : undefined,
+      });
+      return;
+    }
+    for (const warning of validation.warnings) {
+      toast.warning(warning);
+    }
+
+    const result = await solveBestInWorker(input, {
+      onProgress: (placed, total) => setProgress(Math.round((placed / total) * 100)),
+    });
 
     if (isLocalMode()) {
       const schedule = localDb.createSchedule(
@@ -113,9 +129,17 @@ export default function SchedulesPage() {
       const pct = Math.round(
         (result.stats.placed_sessions / result.stats.total_sessions) * 100
       );
-      toast.success(
-        `Horario generado: ${result.stats.placed_sessions}/${result.stats.total_sessions} sesiones (${pct}%)`
-      );
+      if (result.stats.unplaced_sessions > 0) {
+        const reasons = [...new Set(result.unplaced.map((u) => u.reason))].join("; ");
+        toast.warning(
+          `Horario incompleto: ${result.stats.placed_sessions}/${result.stats.total_sessions} sesiones (${pct}%)`,
+          { description: reasons }
+        );
+      } else {
+        toast.success(
+          `Horario generado: ${result.stats.placed_sessions}/${result.stats.total_sessions} sesiones (${pct}%)`
+        );
+      }
       router.push(`/dashboard/horarios/${schedule.id}`);
       return;
     }
@@ -161,9 +185,17 @@ export default function SchedulesPage() {
     const pct = Math.round(
       (result.stats.placed_sessions / result.stats.total_sessions) * 100
     );
-    toast.success(
-      `Horario generado: ${result.stats.placed_sessions}/${result.stats.total_sessions} sesiones (${pct}%)`
-    );
+    if (result.stats.unplaced_sessions > 0) {
+      const reasons = [...new Set(result.unplaced.map((u) => u.reason))].join("; ");
+      toast.warning(
+        `Horario incompleto: ${result.stats.placed_sessions}/${result.stats.total_sessions} sesiones (${pct}%)`,
+        { description: reasons }
+      );
+    } else {
+      toast.success(
+        `Horario generado: ${result.stats.placed_sessions}/${result.stats.total_sessions} sesiones (${pct}%)`
+      );
+    }
     router.push(`/dashboard/horarios/${schedule.id}`);
   }
 

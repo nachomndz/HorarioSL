@@ -22,6 +22,7 @@ export interface LocalSession {
 }
 
 export interface LocalDatabase {
+  /** password stores SHA-256 hex digest, not plaintext */
   users: { id: string; email: string; password: string }[];
   session: LocalSession | null;
   schools: School[];

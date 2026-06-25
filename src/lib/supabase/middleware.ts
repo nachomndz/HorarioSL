@@ -5,7 +5,14 @@ import { hasLocalSessionCookie, isLocalMode } from "@/lib/data/mode";
 
 export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
-  const isAuthPage = pathname.startsWith("/login") || pathname.startsWith("/registro");
+
+  if (pathname.startsWith("/registro")) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    return NextResponse.redirect(url);
+  }
+
+  const isAuthPage = pathname.startsWith("/login");
   const isPublic = pathname === "/" || isAuthPage;
 
   if (isLocalMode()) {
