@@ -1,36 +1,82 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# HorarioSL
 
-## Getting Started
+Generador de horarios escolares para colegios. Aplicación Next.js desplegable en Vercel con Supabase.
 
-First, run the development server:
+## Funcionalidades
+
+- **Multi-admin**: varios administradores por colegio (con Supabase)
+- **Malla horaria configurable**: días, horarios, duración de sesiones y recreos
+- **14 cursos**: plantilla 3+6+4+1 (Infantil, Primaria, Secundaria, Diversificación), totalmente editable
+- **Asignaturas y matriz de horas** por curso
+- **Profesores** con horas máximas, asignaturas, ciclos/cursos y disponibilidad
+- **Generador automático** de horarios (motor CSP en el navegador)
+- **Edición drag-and-drop** de sesiones
+- **Exportación a Excel** con hoja por profesor y por curso
+- **Sugerencias de mejora** persistentes
+
+## Requisitos
+
+- Node.js 20+
+- Cuenta en [Supabase](https://supabase.com) (producción)
+- Cuenta en [Vercel](https://vercel.com) (despliegue)
+
+## Desarrollo local
 
 ```bash
+npm install
+cp .env.example .env.local
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Por defecto usa **modo local** (`NEXT_PUBLIC_DATA_SOURCE=local`): datos en `localStorage`, sin Supabase.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Producción con Supabase
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 1. Base de datos
 
-## Learn More
+1. Crea un proyecto en Supabase
+2. Ejecuta en el SQL Editor:
+   - Proyecto nuevo: [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql)
+   - BD existente con schema antiguo: también [`supabase/migrations/002_four_cycles.sql`](supabase/migrations/002_four_cycles.sql)
+3. En Auth → Email: desactiva confirmación de email (o confirma usuarios manualmente)
 
-To learn more about Next.js, take a look at the following resources:
+### 2. Variables de entorno
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+En `.env.local` (local) o Vercel → Settings → Environment Variables:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+NEXT_PUBLIC_DATA_SOURCE=supabase
+NEXT_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=tu-anon-key
+SUPABASE_SERVICE_ROLE_KEY=tu-service-role-key
+```
 
-## Deploy on Vercel
+**Seguridad:** nunca subas claves al repositorio. Si una clave se expone, rótala en Supabase Dashboard → Settings → API.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### 3. Despliegue en Vercel
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Sube el código a GitHub
+2. Importa el repo en [vercel.com/new](https://vercel.com/new)
+3. Añade las variables de entorno anteriores
+4. Deploy
+
+## Flujo de uso
+
+1. Configurar **malla horaria**
+2. Revisar **cursos** y **asignaturas** (matriz de horas)
+3. Añadir **profesores** con restricciones
+4. **Generar horario** y ajustar con drag-and-drop
+5. **Publicar** y **descargar Excel**
+
+## Estructura
+
+```
+src/app/              # Rutas Next.js
+src/components/       # UI, horarios, landing
+src/lib/              # Supabase, solver CSP, Excel
+supabase/migrations/  # Esquema PostgreSQL + RLS
+```
+
+## Licencia
+
+Privado — uso del colegio.
